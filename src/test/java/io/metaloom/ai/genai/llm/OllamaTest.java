@@ -18,7 +18,6 @@ public class OllamaTest {
 		LLMProvider provider = new OllamaLLMProvider();
 		String text = provider.generate(ctx);
 		System.out.println(text);
-
 	}
 
 	@Test
@@ -31,6 +30,5 @@ public class OllamaTest {
 		LLMProvider omni = new OmniProvider(provider);
 		String text = omni.generate(ctx);
 		System.out.println(text);
-
 	}
 }
