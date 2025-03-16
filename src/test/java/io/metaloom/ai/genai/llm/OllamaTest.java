@@ -6,6 +6,7 @@ import io.metaloom.ai.genai.llm.ollama.OllamaLLMProvider;
 import io.metaloom.ai.genai.llm.omni.OmniProvider;
 import io.metaloom.ai.genai.llm.prompt.Prompt;
 import io.metaloom.ai.genai.llm.prompt.impl.PromptImpl;
+import io.vertx.core.json.JsonObject;
 
 public class OllamaTest {
 
@@ -18,6 +19,17 @@ public class OllamaTest {
 		LLMProvider provider = new OllamaLLMProvider();
 		String text = provider.generate(ctx);
 		System.out.println(text);
+	}
+
+	@Test
+	public void testJSON() {
+		LargeLanguageModel model = TestModel.OLLAMA_GEMMA2_27B;
+		Prompt prompt = new PromptImpl("Write hello world in JSON");
+		LLMContext ctx = LLMContext.ctx(prompt, model);
+
+		LLMProvider provider = new OllamaLLMProvider();
+		JsonObject json = provider.generateJson(ctx);
+		System.out.println(json.encodePrettily());
 	}
 
 	@Test

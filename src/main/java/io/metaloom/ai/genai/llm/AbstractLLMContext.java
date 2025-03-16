@@ -36,6 +36,7 @@ public abstract class AbstractLLMContext implements LLMContext {
 		return temperature;
 	}
 
+	@Override
 	public void setTemperature(double temperature) {
 		this.temperature = temperature;
 	}

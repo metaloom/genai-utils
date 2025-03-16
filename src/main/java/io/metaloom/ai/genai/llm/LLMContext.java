@@ -37,10 +37,10 @@ public interface LLMContext {
 
 	List<? extends ChatMessage> chatHistory();
 
-    public static LLMContext ctx(List<? extends ChatMessage> history, LargeLanguageModel model) {
-        return new LLMContextImpl(history, model);
-    }
-	
+	public static LLMContext ctx(List<? extends ChatMessage> history, LargeLanguageModel model) {
+		return new LLMContextImpl(history, model);
+	}
+
 	public static LLMContext ctx(Prompt prompt, LargeLanguageModel model) {
 		return ctx(prompt, null, model);
 	}
@@ -54,4 +54,6 @@ public interface LLMContext {
 		List<? extends ChatMessage> history = List.of(userMsg);
 		return ctx(history, model);
 	}
+
+	void setTemperature(double temperature);
 }

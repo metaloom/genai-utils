@@ -28,7 +28,7 @@ public class PromptImpl implements Prompt {
         String output = template;
         // Poor Mans Template Handling
         for (Entry<String, String> entry : parameters.entrySet()) {
-            output = output.replaceAll("\\$\\{" + entry.getKey() + "\\}", entry.getValue());
+            output = output.replace("${" + entry.getKey() + "}", entry.getValue());
         }
         if (text != null) {
             return output + text;

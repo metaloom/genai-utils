@@ -45,6 +45,8 @@ public class OllamaLLMProvider implements LLMProvider {
 		logger.debug("Using server {} for model {}", url, llm);
 		OllamaChatModelBuilder builder = OllamaChatModel.builder()
 			.baseUrl(url)
+			//.topP(null)
+			//.topK(null)
 			.timeout(Duration.ofMinutes(15))
 			.modelName(ctx.model().id())
 			.numPredict(ctx.tokenOutputLimit())
@@ -53,7 +55,7 @@ public class OllamaLLMProvider implements LLMProvider {
 		if (ctx.seed() != null) {
 			builder.seed(ctx.seed());
 		}
-		if (format != null) {
+		if (format != null && !format.equalsIgnoreCase("text")) {
 			builder.format(format);
 		}
 		ChatLanguageModel model = builder.build();
