@@ -9,15 +9,16 @@ import org.slf4j.LoggerFactory;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel.OllamaChatModelBuilder;
 import dev.langchain4j.model.ollama.OllamaModel;
 import dev.langchain4j.model.ollama.OllamaModels;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel;
 import dev.langchain4j.model.ollama.OllamaStreamingChatModel.OllamaStreamingChatModelBuilder;
-import dev.langchain4j.model.output.Response;
 import io.metaloom.ai.genai.llm.ChatMessage;
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
@@ -45,8 +46,8 @@ public class OllamaLLMProvider implements LLMProvider {
 		logger.debug("Using server {} for model {}", url, llm);
 		OllamaChatModelBuilder builder = OllamaChatModel.builder()
 			.baseUrl(url)
-			//.topP(null)
-			//.topK(null)
+			// .topP(null)
+			// .topK(null)
 			.timeout(Duration.ofMinutes(15))
 			.modelName(ctx.model().id())
 			.numPredict(ctx.tokenOutputLimit())
@@ -61,8 +62,8 @@ public class OllamaLLMProvider implements LLMProvider {
 		ChatLanguageModel model = builder.build();
 
 		List<dev.langchain4j.data.message.ChatMessage> msgs = convertHistory(ctx.chatHistory());
-		Response<AiMessage> response = model.generate(msgs);
-		return response.content().text();
+		ChatResponse response = model.chat(msgs);
+		return response.aiMessage().text();
 	}
 
 	@Override
@@ -97,14 +98,9 @@ public class OllamaLLMProvider implements LLMProvider {
 		OllamaStreamingChatModel model = builder.build();
 
 		List<dev.langchain4j.data.message.ChatMessage> msgs = convertHistory(ctx.chatHistory());
-
 		return Flowable.create(sub -> {
-			model.generate(msgs, new StreamingResponseHandler<AiMessage>() {
-
-				@Override
-				public void onNext(String token) {
-					sub.onNext(new ChunkImpl(token));
-				}
+			ChatRequest request = ChatRequest.builder().messages(msgs).build();
+			model.doChat(request, new StreamingChatResponseHandler() {
 
 				@Override
 				public void onError(Throwable error) {
@@ -113,7 +109,13 @@ public class OllamaLLMProvider implements LLMProvider {
 				}
 
 				@Override
-				public void onComplete(Response<AiMessage> response) {
+				public void onPartialResponse(String partialResponse) {
+					sub.onNext(new ChunkImpl(partialResponse));
+
+				}
+
+				@Override
+				public void onCompleteResponse(ChatResponse completeResponse) {
 					logger.info("Ollama call completed with msg.");
 					sub.onComplete();
 				}

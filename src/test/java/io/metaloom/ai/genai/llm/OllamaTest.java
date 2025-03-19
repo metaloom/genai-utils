@@ -1,7 +1,17 @@
 package io.metaloom.ai.genai.llm;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 
+import dev.langchain4j.data.image.Image;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.ollama.OllamaChatModel;
+import dev.langchain4j.model.ollama.OllamaChatModel.OllamaChatModelBuilder;
 import io.metaloom.ai.genai.llm.ollama.OllamaLLMProvider;
 import io.metaloom.ai.genai.llm.omni.OmniProvider;
 import io.metaloom.ai.genai.llm.prompt.Prompt;
@@ -12,7 +22,7 @@ public class OllamaTest {
 
 	@Test
 	public void testLLM() {
-		LargeLanguageModel model = TestModel.OLLAMA_GEMMA2_27B;
+		LargeLanguageModel model = TestModel.OLLAMA_GEMMA3_27B_Q8;
 		Prompt prompt = new PromptImpl("Write hello world");
 		LLMContext ctx = LLMContext.ctx(prompt, model);
 
