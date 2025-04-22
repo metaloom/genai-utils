@@ -48,6 +48,7 @@ public class OllamaLLMProvider implements LLMProvider {
 			.baseUrl(url)
 			// .topP(null)
 			// .topK(null)
+			// .repeatPenalty(10d)
 			.timeout(Duration.ofMinutes(15))
 			.modelName(ctx.model().id())
 			.numPredict(ctx.tokenOutputLimit())
@@ -127,7 +128,9 @@ public class OllamaLLMProvider implements LLMProvider {
 		return chatHistory.stream().map(entry -> {
 			String role = entry.getRole().toLowerCase();
 			String text = entry.getText();
-			if (role.equalsIgnoreCase("user")) {
+			if (role.equalsIgnoreCase("control")) {
+				return new ControlMessage(text);
+			} else if (role.equalsIgnoreCase("user")) {
 				return new UserMessage(text);
 			} else {
 				return new AiMessage(text);
