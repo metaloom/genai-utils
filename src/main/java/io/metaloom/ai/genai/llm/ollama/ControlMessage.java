@@ -1,24 +1,13 @@
 package io.metaloom.ai.genai.llm.ollama;
 
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.ChatMessageType;
+import java.util.Map;
 
-public class ControlMessage implements ChatMessage {
+import dev.langchain4j.data.message.CustomMessage;
 
-	private String text;
+public class ControlMessage extends CustomMessage {
 
-	public ControlMessage(String text) {
-		this.text = text;
-	}
-
-	@Override
-	public ChatMessageType type() {
-		return ChatMessageType.CONTROL;
-	}
-
-	@Override
-	public String text() {
-		return text;
+	public ControlMessage() {
+		super(Map.of("role", "control", "content", "thinking"));
 	}
 
 }

@@ -129,7 +129,7 @@ public class OllamaLLMProvider implements LLMProvider {
 			String role = entry.getRole().toLowerCase();
 			String text = entry.getText();
 			if (role.equalsIgnoreCase("control")) {
-				return new ControlMessage(text);
+				return new ControlMessage();
 			} else if (role.equalsIgnoreCase("user")) {
 				return new UserMessage(text);
 			} else {
