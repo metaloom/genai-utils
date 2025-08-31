@@ -9,13 +9,15 @@ public abstract class AbstractLLMContext implements LLMContext {
 
 	private double temperature = 0.35f;
 
-	private int tokenOutputLimit = 2048;
+	private int tokenOutputLimit = 4096;
 
 	private Integer seed = null;
 
 	private LargeLanguageModel llm;
 
 	private List<? extends ChatMessage> chatHistory = new ArrayList<>();
+
+	private boolean think = false;
 
 	public AbstractLLMContext(List<? extends ChatMessage> chatHistory, LargeLanguageModel model) {
 		this.chatHistory = chatHistory;
@@ -57,6 +59,16 @@ public abstract class AbstractLLMContext implements LLMContext {
 
 	public void setModel(LargeLanguageModel llm) {
 		this.llm = llm;
+	}
+
+	@Override
+	public LLMContext enableThink() {
+		this.think = true;
+		return this;
+	}
+
+	public boolean isThinkEnabled() {
+		return think;
 	}
 
 	@Override

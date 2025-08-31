@@ -14,4 +14,8 @@ public interface ChatMessage {
 	public static ChatMessage assistant(String text) {
 		return new ChatMessageImpl(text, "role");
 	}
+
+	public static ChatMessage system(String text) {
+		return new ChatMessageImpl(text, "system");
+	}
 }

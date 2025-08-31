@@ -56,4 +56,8 @@ public interface LLMContext {
 	}
 
 	void setTemperature(double temperature);
+
+	LLMContext enableThink();
+
+	boolean isThinkEnabled();
 }

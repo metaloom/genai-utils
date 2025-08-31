@@ -8,9 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.ollama.OllamaChatModel;
@@ -54,16 +55,23 @@ public class OllamaLLMProvider implements LLMProvider {
 			.numPredict(ctx.tokenOutputLimit())
 			.temperature(ctx.temperature());
 
+		if (ctx.isThinkEnabled()) {
+			builder.think(true);
+		}
+
 		if (ctx.seed() != null) {
 			builder.seed(ctx.seed());
 		}
 		if (format != null && !format.equalsIgnoreCase("text")) {
-			builder.format(format);
+			builder.responseFormat(ResponseFormat.JSON);
 		}
-		ChatLanguageModel model = builder.build();
+		OllamaChatModel model = builder.build();
 
 		List<dev.langchain4j.data.message.ChatMessage> msgs = convertHistory(ctx.chatHistory());
 		ChatResponse response = model.chat(msgs);
+		if (response.aiMessage().thinking() != null) {
+			System.err.println(response.aiMessage().thinking());
+		}
 		return response.aiMessage().text();
 	}
 
@@ -89,6 +97,7 @@ public class OllamaLLMProvider implements LLMProvider {
 			.baseUrl(url)
 			.timeout(Duration.ofMinutes(15))
 			.modelName(ctx.model().id())
+			.think(ctx.isThinkEnabled())
 			.numPredict(ctx.tokenOutputLimit())
 			.temperature(ctx.temperature());
 
@@ -112,13 +121,17 @@ public class OllamaLLMProvider implements LLMProvider {
 				@Override
 				public void onPartialResponse(String partialResponse) {
 					sub.onNext(new ChunkImpl(partialResponse));
-
 				}
 
 				@Override
 				public void onCompleteResponse(ChatResponse completeResponse) {
 					logger.info("Ollama call completed with msg.");
 					sub.onComplete();
+				}
+
+				@Override
+				public void onPartialThinkingResponse(String partialThinkingResponse) {
+
 				}
 			});
 		}, BackpressureStrategy.BUFFER);
@@ -132,6 +145,8 @@ public class OllamaLLMProvider implements LLMProvider {
 				return new ControlMessage();
 			} else if (role.equalsIgnoreCase("user")) {
 				return new UserMessage(text);
+			} else if (role.equalsIgnoreCase("system")) {
+				return new SystemMessage(text);
 			} else {
 				return new AiMessage(text);
 			}
