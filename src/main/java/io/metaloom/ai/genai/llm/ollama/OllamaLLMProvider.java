@@ -129,10 +129,6 @@ public class OllamaLLMProvider implements LLMProvider {
 					sub.onComplete();
 				}
 
-				@Override
-				public void onPartialThinkingResponse(String partialThinkingResponse) {
-
-				}
 			});
 		}, BackpressureStrategy.BUFFER);
 	}
