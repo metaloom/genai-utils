@@ -58,5 +58,7 @@ public interface Prompt {
 	 * @param text
 	 */
 	void setText(String text);
+	
+	String text();
 
 }

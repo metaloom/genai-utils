@@ -53,6 +53,11 @@ public class PromptImpl implements Prompt {
     }
 
     @Override
+    public String text() {
+        return text;
+    }
+
+    @Override
     public void setText(String text) {
         this.text = text;
     }

@@ -4,89 +4,98 @@ import java.util.ArrayList;
 import java.util.List;
 
 import io.metaloom.ai.genai.llm.impl.LLMContextImpl;
+import io.metaloom.ai.genai.llm.prompt.Prompt;
 
 public abstract class AbstractLLMContext implements LLMContext {
 
-	private double temperature = 0.35f;
+    private double temperature = 0.35f;
 
-	private int tokenOutputLimit = 4096;
+    private int tokenOutputLimit = 4096;
 
-	private Integer seed = null;
+    private Integer seed = null;
 
-	private LargeLanguageModel llm;
+    private LargeLanguageModel llm;
 
-	private List<? extends ChatMessage> chatHistory = new ArrayList<>();
+    private List<? extends ChatMessage> chatHistory = new ArrayList<>();
 
-	private boolean think = false;
+    private boolean think = false;
 
-	public AbstractLLMContext(List<? extends ChatMessage> chatHistory, LargeLanguageModel model) {
-		this.chatHistory = chatHistory;
-		this.llm = model;
-	}
+    private Prompt prompt;
 
-	@Override
-	public Integer seed() {
-		return seed;
-	}
+    public AbstractLLMContext(List<? extends ChatMessage> chatHistory, LargeLanguageModel model, Prompt prompt) {
+        this.chatHistory = chatHistory;
+        this.llm = model;
+        this.prompt = prompt;
+    }
 
-	public void setSeed(Integer seed) {
-		this.seed = seed;
-	}
+    @Override
+    public Integer seed() {
+        return seed;
+    }
 
-	@Override
-	public double temperature() {
-		return temperature;
-	}
+    public void setSeed(Integer seed) {
+        this.seed = seed;
+    }
 
-	@Override
-	public void setTemperature(double temperature) {
-		this.temperature = temperature;
-	}
+    @Override
+    public double temperature() {
+        return temperature;
+    }
 
-	@Override
-	public int tokenOutputLimit() {
-		return tokenOutputLimit;
-	}
+    @Override
+    public void setTemperature(double temperature) {
+        this.temperature = temperature;
+    }
 
-	public void setTokenOutputLimit(int tokenOutputLimit) {
-		this.tokenOutputLimit = tokenOutputLimit;
-	}
+    @Override
+    public int tokenOutputLimit() {
+        return tokenOutputLimit;
+    }
 
-	@Override
-	public LargeLanguageModel model() {
-		return llm;
-	}
+    public void setTokenOutputLimit(int tokenOutputLimit) {
+        this.tokenOutputLimit = tokenOutputLimit;
+    }
 
-	public void setModel(LargeLanguageModel llm) {
-		this.llm = llm;
-	}
+    @Override
+    public LargeLanguageModel model() {
+        return llm;
+    }
 
-	@Override
-	public LLMContext enableThink() {
-		this.think = true;
-		return this;
-	}
+    public void setModel(LargeLanguageModel llm) {
+        this.llm = llm;
+    }
 
-	public boolean isThinkEnabled() {
-		return think;
-	}
+    @Override
+    public LLMContext enableThink() {
+        this.think = true;
+        return this;
+    }
 
-	@Override
-	public List<? extends ChatMessage> chatHistory() {
-		return chatHistory;
-	}
+    public boolean isThinkEnabled() {
+        return think;
+    }
 
-	public void setChatHistory(List<? extends ChatMessage> chatHistory) {
-		this.chatHistory = chatHistory;
-	}
+    @Override
+    public List<? extends ChatMessage> chatHistory() {
+        return chatHistory;
+    }
 
-	@Override
-	public String toString() {
-		return "[msgs:" + chatHistory().size() + ",limit:" + tokenOutputLimit + ",temp:" + temperature + ",model:" + llm.id() + ",seed:" + seed + "]";
-	}
+    public void setChatHistory(List<? extends ChatMessage> chatHistory) {
+        this.chatHistory = chatHistory;
+    }
 
-	public static LLMContext ctx(List<? extends ChatMessage> history, LargeLanguageModel model) {
-		return new LLMContextImpl(history, model);
-	}
+    @Override
+    public String toString() {
+        return "[msgs:" + chatHistory().size() + ",limit:" + tokenOutputLimit + ",temp:" + temperature + ",model:" + llm.id() + ",seed:" + seed + "]";
+    }
+
+    public static LLMContext ctx(List<? extends ChatMessage> history, LargeLanguageModel model, Prompt prompt) {
+        return new LLMContextImpl(history, model, prompt);
+    }
+
+    @Override
+    public Prompt prompt() {
+        return prompt;
+    }
 
 }
