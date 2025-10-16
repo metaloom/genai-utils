@@ -52,7 +52,8 @@ public class OllamaLLMProvider implements LLMProvider {
 			// .repeatPenalty(10d)
 			.timeout(Duration.ofMinutes(15))
 			.modelName(ctx.model().id())
-			.numPredict(ctx.tokenOutputLimit())
+			.numCtx(16384)
+			//.numPredict(ctx.tokenOutputLimit())
 			.temperature(ctx.temperature());
 
 		if (ctx.isThinkEnabled()) {
