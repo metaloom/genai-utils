@@ -29,7 +29,7 @@
 	<properties>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.github.repository>metaloom/genai-utils</project.github.repository>
-		<vertx.version>5.0.0</vertx.version>
+		<vertx.version>5.0.10</vertx.version>
 		<langchain4j-ollama.version>1.4.0</langchain4j-ollama.version>
 		<langchain4j-core.version>1.4.0</langchain4j-core.version>
 		<lucene.version>10.3.0</lucene.version>
