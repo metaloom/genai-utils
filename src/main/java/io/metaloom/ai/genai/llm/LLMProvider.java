@@ -11,5 +11,14 @@ public interface LLMProvider {
 
 	Flowable<Chunk> generateStream(LLMContext ctx);
 
+	/**
+	 * Generate a response that may include tool/function calls.
+	 * The tools to be offered to the LLM are taken from {@link LLMContext#tools()}.
+	 *
+	 * @param ctx
+	 * @return response containing optional text content and/or tool calls
+	 */
+	ToolCallResponse generateWithTools(LLMContext ctx);
+
 	LLMProviderType type();
 }

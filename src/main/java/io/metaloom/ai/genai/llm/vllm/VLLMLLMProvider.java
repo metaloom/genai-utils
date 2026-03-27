@@ -1,23 +1,35 @@
 package io.metaloom.ai.genai.llm.vllm;
 
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
+import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
+import com.openai.models.FunctionDefinition;
+import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletion.Choice;
 import com.openai.models.chat.completions.ChatCompletionChunk;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
+import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
 
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
 import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
+import io.metaloom.ai.genai.llm.ToolCall;
+import io.metaloom.ai.genai.llm.ToolCallResponse;
+import io.metaloom.ai.genai.llm.ToolDefinition;
 import io.metaloom.ai.genai.llm.error.LLMException;
 import io.metaloom.ai.genai.llm.impl.ChunkImpl;
 import io.metaloom.ai.genai.utils.ReasoningUtils;
@@ -122,6 +134,60 @@ public class VLLMLLMProvider implements LLMProvider {
 	@Override
 	public LLMProviderType type() {
 		return LLMProviderType.VLLM;
+	}
+
+	@Override
+	public ToolCallResponse generateWithTools(LLMContext ctx) {
+		LargeLanguageModel model = ctx.model();
+		OpenAIClient client = buildClient(model.url());
+
+		ChatCompletionCreateParams.Builder paramsBuilder = ChatCompletionCreateParams.builder()
+			.addUserMessage(ctx.prompt().input())
+			.temperature(ctx.temperature())
+			.model(model.id());
+
+		// Add tool definitions
+		for (ToolDefinition tool : ctx.tools()) {
+			FunctionDefinition funcDef = FunctionDefinition.builder()
+				.name(tool.name())
+				.description(tool.description())
+				.parameters(convertToFunctionParameters(tool.parameters()))
+				.build();
+			paramsBuilder.addFunctionTool(funcDef);
+		}
+
+		ChatCompletionCreateParams params = paramsBuilder.build();
+		ChatCompletion chatCompletion = client.chat().completions().create(params);
+
+		Choice firstChoice = chatCompletion.choices().getFirst();
+		String content = firstChoice.message().content().orElse(null);
+
+		List<ToolCall> toolCalls = Collections.emptyList();
+		if (firstChoice.message().toolCalls().isPresent()) {
+			toolCalls = firstChoice.message().toolCalls().get().stream()
+				.filter(ChatCompletionMessageToolCall::isFunction)
+				.map(tc -> {
+					ChatCompletionMessageFunctionToolCall ftc = tc.asFunction();
+					return new ToolCall(
+						ftc.id(),
+						ftc.function().name(),
+						new JsonObject(ftc.function().arguments()));
+				})
+				.collect(Collectors.toList());
+		}
+		return new ToolCallResponse(content, toolCalls);
+	}
+
+	private FunctionParameters convertToFunctionParameters(JsonObject params) {
+		if (params == null) {
+			return FunctionParameters.builder().build();
+		}
+		FunctionParameters.Builder builder = FunctionParameters.builder();
+		Map<String, Object> map = params.getMap();
+		for (Map.Entry<String, Object> entry : map.entrySet()) {
+			builder.putAdditionalProperty(entry.getKey(), JsonValue.from(entry.getValue()));
+		}
+		return builder.build();
 	}
 	
 	private OpenAIClient buildClient(String url) {

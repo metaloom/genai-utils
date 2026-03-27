@@ -1,5 +1,6 @@
 package io.metaloom.ai.genai.llm;
 
+import java.util.Collections;
 import java.util.List;
 
 import io.metaloom.ai.genai.llm.impl.LLMContextImpl;
@@ -69,4 +70,20 @@ public interface LLMContext {
 	boolean isThinkEnabled();
 
 	Prompt prompt();
+
+	/**
+	 * Return the tool definitions available for tool calling.
+	 *
+	 * @return list of tool definitions, empty if none set
+	 */
+	default List<ToolDefinition> tools() {
+		return Collections.emptyList();
+	}
+
+	/**
+	 * Set the tool definitions to offer to the LLM.
+	 *
+	 * @param tools
+	 */
+	void setTools(List<ToolDefinition> tools);
 }

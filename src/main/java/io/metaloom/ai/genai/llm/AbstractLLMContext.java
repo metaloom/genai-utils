@@ -1,6 +1,7 @@
 package io.metaloom.ai.genai.llm;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import io.metaloom.ai.genai.llm.impl.LLMContextImpl;
@@ -21,6 +22,8 @@ public abstract class AbstractLLMContext implements LLMContext {
     private boolean think = false;
 
     private Prompt prompt;
+
+    private List<ToolDefinition> tools = Collections.emptyList();
 
     public AbstractLLMContext(List<? extends ChatMessage> chatHistory, LargeLanguageModel model, Prompt prompt) {
         this.chatHistory = chatHistory;
@@ -96,6 +99,16 @@ public abstract class AbstractLLMContext implements LLMContext {
     @Override
     public Prompt prompt() {
         return prompt;
+    }
+
+    @Override
+    public List<ToolDefinition> tools() {
+        return tools;
+    }
+
+    @Override
+    public void setTools(List<ToolDefinition> tools) {
+        this.tools = tools != null ? tools : Collections.emptyList();
     }
 
 }

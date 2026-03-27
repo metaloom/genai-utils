@@ -7,6 +7,7 @@ import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
 import io.metaloom.ai.genai.llm.LLMProviderType;
+import io.metaloom.ai.genai.llm.ToolCallResponse;
 import io.reactivex.rxjava3.core.Flowable;
 import io.vertx.core.json.JsonObject;
 
@@ -31,6 +32,11 @@ public class OmniProvider implements LLMProvider {
 	@Override
 	public Flowable<Chunk> generateStream(LLMContext ctx) {
 		return selectProvider(ctx).generateStream(ctx);
+	}
+
+	@Override
+	public ToolCallResponse generateWithTools(LLMContext ctx) {
+		return selectProvider(ctx).generateWithTools(ctx);
 	}
 
 	LLMProvider selectProvider(LLMContext ctx) {

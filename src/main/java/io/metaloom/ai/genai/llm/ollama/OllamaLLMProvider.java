@@ -1,17 +1,29 @@
 package io.metaloom.ai.genai.llm.ollama;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ResponseFormat;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
+import dev.langchain4j.model.chat.request.json.JsonStringSchema;
+import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
+import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
+import dev.langchain4j.model.chat.request.json.JsonArraySchema;
+import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.ollama.OllamaChatModel;
@@ -26,10 +38,14 @@ import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
 import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
+import io.metaloom.ai.genai.llm.ToolCall;
+import io.metaloom.ai.genai.llm.ToolCallResponse;
+import io.metaloom.ai.genai.llm.ToolDefinition;
 import io.metaloom.ai.genai.llm.impl.ChunkImpl;
 import io.metaloom.ai.genai.utils.TextUtils;
 import io.reactivex.rxjava3.core.BackpressureStrategy;
 import io.reactivex.rxjava3.core.Flowable;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
 public class OllamaLLMProvider implements LLMProvider {
@@ -157,6 +173,113 @@ public class OllamaLLMProvider implements LLMProvider {
 		for (OllamaModel model : models.availableModels().content()) {
 			System.out.println("Model: " + model.getName());
 		}
+	}
+
+	@Override
+	public ToolCallResponse generateWithTools(LLMContext ctx) {
+		LargeLanguageModel llm = ctx.model();
+		String url = llm.url();
+		logger.debug("Using server {} for model {} (tool calling)", url, llm);
+
+		OllamaChatModelBuilder builder = OllamaChatModel.builder()
+			.baseUrl(url)
+			.maxRetries(1)
+			.timeout(Duration.ofSeconds(60))
+			.modelName(ctx.model().id())
+			.numCtx(16384)
+			.temperature(ctx.temperature());
+
+		if (ctx.seed() != null) {
+			builder.seed(ctx.seed());
+		}
+
+		OllamaChatModel model = builder.build();
+
+		List<dev.langchain4j.data.message.ChatMessage> msgs = convertHistory(ctx.chatHistory());
+		List<ToolSpecification> toolSpecs = convertToolDefinitions(ctx.tools());
+
+		ChatRequest request = ChatRequest.builder()
+			.messages(msgs)
+			.toolSpecifications(toolSpecs)
+			.build();
+
+		ChatResponse response = model.chat(request);
+		AiMessage aiMessage = response.aiMessage();
+
+		String content = aiMessage.text();
+		List<ToolCall> toolCalls = Collections.emptyList();
+		if (aiMessage.hasToolExecutionRequests()) {
+			toolCalls = aiMessage.toolExecutionRequests().stream()
+				.map(req -> new ToolCall(
+					req.id(),
+					req.name(),
+					new JsonObject(req.arguments())))
+				.collect(Collectors.toList());
+		}
+		return new ToolCallResponse(content, toolCalls);
+	}
+
+	private List<ToolSpecification> convertToolDefinitions(List<ToolDefinition> tools) {
+		if (tools == null || tools.isEmpty()) {
+			return Collections.emptyList();
+		}
+		return tools.stream().map(tool -> {
+			ToolSpecification.Builder builder = ToolSpecification.builder()
+				.name(tool.name())
+				.description(tool.description());
+
+			if (tool.parameters() != null) {
+				builder.parameters(convertToJsonObjectSchema(tool.parameters()));
+			}
+			return builder.build();
+		}).collect(Collectors.toList());
+	}
+
+	private JsonObjectSchema convertToJsonObjectSchema(JsonObject params) {
+		JsonObjectSchema.Builder schemaBuilder = JsonObjectSchema.builder();
+		JsonObject properties = params.getJsonObject("properties");
+		if (properties != null) {
+			Map<String, JsonSchemaElement> propMap = new HashMap<>();
+			for (String key : properties.fieldNames()) {
+				JsonObject prop = properties.getJsonObject(key);
+				propMap.put(key, convertPropertyToSchemaElement(prop));
+			}
+			schemaBuilder.addProperties(propMap);
+		}
+		JsonArray required = params.getJsonArray("required");
+		if (required != null) {
+			List<String> reqList = new ArrayList<>();
+			for (int i = 0; i < required.size(); i++) {
+				reqList.add(required.getString(i));
+			}
+			schemaBuilder.required(reqList);
+		}
+		return schemaBuilder.build();
+	}
+
+	private JsonSchemaElement convertPropertyToSchemaElement(JsonObject prop) {
+		String type = prop.getString("type", "string");
+		String description = prop.getString("description");
+		return switch (type) {
+			case "integer" -> JsonIntegerSchema.builder().description(description).build();
+			case "number" -> JsonNumberSchema.builder().description(description).build();
+			case "boolean" -> JsonBooleanSchema.builder().description(description).build();
+			case "array" -> {
+				JsonArraySchema.Builder arrBuilder = JsonArraySchema.builder().description(description);
+				JsonObject items = prop.getJsonObject("items");
+				if (items != null) {
+					arrBuilder.items(convertPropertyToSchemaElement(items));
+				}
+				yield arrBuilder.build();
+			}
+			case "object" -> {
+				if (prop.containsKey("properties")) {
+					yield convertToJsonObjectSchema(prop);
+				}
+				yield JsonObjectSchema.builder().description(description).build();
+			}
+			default -> JsonStringSchema.builder().description(description).build();
+		};
 	}
 
 	@Override

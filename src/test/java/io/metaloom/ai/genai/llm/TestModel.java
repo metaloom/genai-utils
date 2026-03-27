@@ -6,9 +6,11 @@ public enum TestModel implements LargeLanguageModel {
 
 	OLLAMA_GEMMA3_27B_Q8("gemma3:27b-it-q8_0", LLMProviderType.OLLAMA),
 
-	OLLAMA_GEMMA3_12B_Q8("gemma3:12b-it-q8_0", LLMProviderType.OLLAMA), 
+	OLLAMA_GEMMA3_12B_Q8("gemma3:12b-it-q8_0", LLMProviderType.OLLAMA),
 
-	OLLAMA_MAGISTRAL_24B("magistral:24b", LLMProviderType.OLLAMA);
+	OLLAMA_MAGISTRAL_24B("magistral:24b", LLMProviderType.OLLAMA),
+
+	OLLAMA_GPT_OSS_20B("gpt-oss:20b", LLMProviderType.OLLAMA);
 
 	private String id;
 
