@@ -1,13 +1,24 @@
 package io.metaloom.ai.genai.utils;
 
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Scanner;
 import java.util.Set;
+import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 
 public final class TextUtils {
+
+	private static final String UMLAUTS = "\\u00c4\\u00e4\\u00d6\\u00f6\\u00dc\\u00fc\\u00df\\p{L}";
+
+	private static final String OTHER_REGEX = "(?<other>.)";
+
+	private static final String WORD_REGEX = "(?<word>[" + UMLAUTS + "\\w]+)";
+
+	public static final SecureRandom RANDOM = new SecureRandom();
 
 	public TextUtils() {
 	}
@@ -126,5 +137,112 @@ public final class TextUtils {
 			return false;
 		}
 	}
+
+	public static String randomBase64Str(int len) {
+		int inputBytes = len;
+		byte[] randomBytes = new byte[inputBytes];
+		RANDOM.nextBytes(randomBytes);
+		return Base64.getEncoder().encodeToString(randomBytes).toUpperCase().substring(0, len);
+	}
+
+	public static String trimToWords(String text, int words) {
+		String s = "Hello   world test";
+		StringBuilder b = new StringBuilder();
+		try (Scanner scanner = new Scanner(text)) {
+			int i = 0;
+			for (MatchResult result : scanner.findAll(WORD_REGEX + "|" + OTHER_REGEX).toList()) {
+				String p = result.group();
+				if (!p.trim().isBlank()) {
+					i++;
+				}
+				b.append(p);
+				if (i >= words) {
+					break;
+				}
+			}
+		}
+
+		return b.toString().trim();
+	}
+
+	/**
+	 * Checks whether the input text contains more non-ascii characters vs ascii
+	 * characters in order to determine whether this is a logographical text.
+	 * 
+	 * @param text
+	 * @return
+	 */
+	public static boolean isLogoGraphical(String text) {
+		if (text == null || text.isEmpty()) {
+			return false;
+		}
+
+		int asciiCount = 0;
+		int nonAsciiCount = 0;
+
+		for (char c : text.toCharArray()) {
+			if (c <= 127) {
+				asciiCount++;
+			} else {
+				nonAsciiCount++;
+			}
+		}
+
+		// Avoid division by zero
+		if (asciiCount + nonAsciiCount == 0) {
+			return false;
+		}
+
+		double asciiRatio = (double) asciiCount / nonAsciiCount;
+		return asciiRatio < 1;
+	}
+
+	/**
+	 * Checks whether the input text only contains ascii characters.
+	 * 
+	 * @param text
+	 * @return
+	 */
+	public static boolean isAscii(String text) {
+		if (text == null) {
+			return false;
+		}
+		if (text.isBlank()) {
+			return true;
+		}
+
+		int asciiCount = 0;
+		int nonAsciiCount = 0;
+
+		for (char c : text.toCharArray()) {
+			if (c <= 255) {
+				asciiCount++;
+			} else {
+				nonAsciiCount++;
+			}
+		}
+
+		return nonAsciiCount == 0;
+	}
+
+	public static boolean isEnglish(String text) {
+		if (text == null) {
+			return false;
+		}
+		text = text.toLowerCase();
+		for (String word : List.of("the", "it", "he", "she", "be", "have", "that", "and")) {
+			if (text.contains(" " + word + " ")) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	public static boolean hasWord(String text, String word) {
+		String wordNeedle = word.toLowerCase();
+		wordNeedle = wordNeedle.substring(0, wordNeedle.length() - 2);
+		return text.toLowerCase().contains(wordNeedle);
+	}
+
 
 }

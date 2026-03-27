@@ -5,4 +5,6 @@ package io.metaloom.ai.genai.llm;
  */
 public interface Chunk {
 
+	boolean isThinking();
+
 }

@@ -46,9 +46,33 @@ public class TextUtilsTest {
 	}
 
 	@Test
-	public void trimsNonAsciiAtEnd() {
+	public void testTrimsNonAsciiAtEnd() {
 		assertEquals("Hello", TextUtils.trimNonAsciiFromEnd("Hello世界"));
 		assertEquals("Data", TextUtils.trimNonAsciiFromEnd("Data✓"));
 		assertEquals("Test", TextUtils.trimNonAsciiFromEnd("Testé"));
+	}
+
+	@Test
+	public void testRandomBase64Str() {
+		String s = TextUtils.randomBase64Str(64);
+		assertEquals(64, s.length());
+		System.out.println(s);
+	}
+	
+	@Test
+	public void testTrimToWords() {
+		assertEquals("Hallo Welt", TextUtils.trimToWords("Hallo Welt Johannes",2));
+		assertEquals("Hallo Welt", TextUtils.trimToWords("Hallo Welt",2));
+		assertEquals("Hallo Welt", TextUtils.trimToWords("Hallo Welt Johannes 1234",2));
+		assertEquals("Hallo", TextUtils.trimToWords("Hallo",2));
+		assertEquals("Hallo", TextUtils.trimToWords("Hallo ",2));
+		assertEquals("Hallo", TextUtils.trimToWords("Hallo   ",2));
+		assertEquals("Hallo  Welt", TextUtils.trimToWords("Hallo  Welt",2));
+	}
+	
+	@Test
+	public void testIsEnglish() {
+		assertTrue(TextUtils.isEnglish("The brown dog jumped over the black fence."));
+		assertFalse(TextUtils.isEnglish("Der braune Hund springt über den schwarzen Zaun."));
 	}
 }

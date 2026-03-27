@@ -30,7 +30,7 @@ public enum TestModel implements LargeLanguageModel {
 	}
 
 	@Override
-	public int contextWindow() {
+	public long contextWindow() {
 		return 4096;
 	}
 

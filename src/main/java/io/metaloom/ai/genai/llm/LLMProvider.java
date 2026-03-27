@@ -1,6 +1,6 @@
 package io.metaloom.ai.genai.llm;
 
-import io.reactivex.Flowable;
+import io.reactivex.rxjava3.core.Flowable;
 import io.vertx.core.json.JsonObject;
 
 public interface LLMProvider {

@@ -28,8 +28,8 @@ import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
 import io.metaloom.ai.genai.llm.impl.ChunkImpl;
 import io.metaloom.ai.genai.utils.TextUtils;
-import io.reactivex.BackpressureStrategy;
-import io.reactivex.Flowable;
+import io.reactivex.rxjava3.core.BackpressureStrategy;
+import io.reactivex.rxjava3.core.Flowable;
 import io.vertx.core.json.JsonObject;
 
 public class OllamaLLMProvider implements LLMProvider {
@@ -51,7 +51,7 @@ public class OllamaLLMProvider implements LLMProvider {
 			// .topK(null)
 			// .repeatPenalty(10d)
 			.maxRetries(1)
-			.timeout(Duration.ofSeconds(30))
+			.timeout(Duration.ofSeconds(60))
 			.modelName(ctx.model().id())
 			.numCtx(16384)
 			//.numPredict(ctx.tokenOutputLimit())
@@ -122,7 +122,7 @@ public class OllamaLLMProvider implements LLMProvider {
 
 				@Override
 				public void onPartialResponse(String partialResponse) {
-					sub.onNext(new ChunkImpl(partialResponse));
+					sub.onNext(new ChunkImpl(partialResponse, false));
 				}
 
 				@Override

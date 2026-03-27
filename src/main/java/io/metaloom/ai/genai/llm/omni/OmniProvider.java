@@ -7,7 +7,7 @@ import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
 import io.metaloom.ai.genai.llm.LLMProviderType;
-import io.reactivex.Flowable;
+import io.reactivex.rxjava3.core.Flowable;
 import io.vertx.core.json.JsonObject;
 
 public class OmniProvider implements LLMProvider {

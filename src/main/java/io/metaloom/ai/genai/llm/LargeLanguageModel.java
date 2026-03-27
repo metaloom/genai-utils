@@ -21,7 +21,7 @@ public interface LargeLanguageModel {
 	 * 
 	 * @return
 	 */
-	int contextWindow();
+	long contextWindow();
 
 	/**
 	 * Vendor / Provider of the LLM service for the model.

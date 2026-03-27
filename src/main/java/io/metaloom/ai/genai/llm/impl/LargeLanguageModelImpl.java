@@ -7,7 +7,7 @@ public class LargeLanguageModelImpl implements LargeLanguageModel {
 
 	private String id;
 	private String url;
-	private int contextWindow;
+	private long contextWindow;
 	private LLMProviderType type;
 
 	public LargeLanguageModelImpl(String id, String url, int contextWindow, LLMProviderType type) {
@@ -28,7 +28,7 @@ public class LargeLanguageModelImpl implements LargeLanguageModel {
 	}
 
 	@Override
-	public int contextWindow() {
+	public long contextWindow() {
 		return contextWindow;
 	}
 
