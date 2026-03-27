@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -134,5 +135,82 @@ public class OllamaToolCallTest {
 		for (ToolCall call : response.toolCalls()) {
 			System.out.println("  -> " + call.name() + " " + call.arguments());
 		}
+	}
+
+	@Test
+	public void testToolCallLoop() {
+		LargeLanguageModel model = TestModel.OLLAMA_GPT_OSS_20B;
+		Prompt prompt = new PromptImpl(
+				"You MUST use the provided tools to answer. Do NOT use your internal knowledge. "
+				+ "Use the appropriate tool for each question.\n\n"
+				+ "Questions:\n"
+				+ "1. What is the current weather in Berlin?\n"
+				+ "2. Who won the World Series in 1919?");
+
+		// Build a mutable chat history starting with the user message
+		List<ChatMessage> history = new ArrayList<>();
+		history.add(ChatMessage.user(prompt.input()));
+
+		List<ToolDefinition> tools = List.of(weatherTool(), historyTool());
+
+		LLMProvider provider = new OllamaLLMProvider();
+		int maxIterations = 5;
+
+		for (int i = 0; i < maxIterations; i++) {
+			System.out.println("\n=== Iteration " + (i + 1) + " ===");
+
+			// Build context from current history
+			LLMContext ctx = LLMContext.ctx(history, model, prompt);
+			ctx.setTools(tools);
+
+			ToolCallResponse response = provider.generateWithTools(ctx);
+			assertNotNull(response);
+
+			System.out.println("Content: " + response.content());
+			System.out.println("Tool calls: " + response.toolCalls());
+
+			if (!response.hasToolCalls()) {
+				// No more tool calls — the LLM produced a final answer
+				System.out.println("\n=== Final answer ===");
+				System.out.println(response.content());
+				assertNotNull(response.content(), "Expected a final text response");
+				return;
+			}
+
+			// Add the assistant message (with its tool calls) to the history
+			history.add(ChatMessage.assistantWithToolCalls(response.toolCalls()));
+
+			// Execute each tool call and feed the result back
+			for (ToolCall call : response.toolCalls()) {
+				System.out.println("  -> Executing: " + call.name() + " " + call.arguments());
+
+				// Simulate tool execution with fake results
+				String result = simulateToolExecution(call);
+				System.out.println("  <- Result: " + result);
+
+				// Add the tool result to the conversation
+				history.add(ChatMessage.toolResult(call.id(), call.name(), result));
+			}
+		}
+
+		System.out.println("Loop ended after " + maxIterations + " iterations without a final answer");
+	}
+
+	/**
+	 * Simulate tool execution with canned responses.
+	 */
+	private String simulateToolExecution(ToolCall call) {
+		return switch (call.name()) {
+			case "get_current_weather" -> {
+				String location = call.arguments().getString("location", "Unknown");
+				yield "The current weather in " + location + " is 18°C, partly cloudy with a light breeze.";
+			}
+			case "get_history_info" -> {
+				String topic = call.arguments().getString("topic", "Unknown");
+				yield "Regarding '" + topic + "': The Cincinnati Reds won the 1919 World Series, "
+						+ "which was notably tainted by the Black Sox scandal.";
+			}
+			default -> "No information available for tool: " + call.name();
+		};
 	}
 }

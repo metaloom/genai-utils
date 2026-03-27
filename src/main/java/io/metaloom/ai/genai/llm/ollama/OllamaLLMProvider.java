@@ -11,9 +11,11 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ResponseFormat;
@@ -156,13 +158,26 @@ public class OllamaLLMProvider implements LLMProvider {
 			String role = entry.getRole().toLowerCase();
 			String text = entry.getText();
 			if (role.equalsIgnoreCase("control")) {
-				return new ControlMessage();
+				return (dev.langchain4j.data.message.ChatMessage) new ControlMessage();
 			} else if (role.equalsIgnoreCase("user")) {
-				return new UserMessage(text);
+				return (dev.langchain4j.data.message.ChatMessage) new UserMessage(text);
 			} else if (role.equalsIgnoreCase("system")) {
-				return new SystemMessage(text);
+				return (dev.langchain4j.data.message.ChatMessage) new SystemMessage(text);
+			} else if (role.equalsIgnoreCase("tool")) {
+				return (dev.langchain4j.data.message.ChatMessage) new ToolExecutionResultMessage(
+					entry.getToolCallId(), entry.getToolName(), text);
+			} else if (role.equalsIgnoreCase("assistant") && !entry.getToolCalls().isEmpty()) {
+				// Assistant message that requested tool calls
+				List<ToolExecutionRequest> requests = entry.getToolCalls().stream()
+					.map(tc -> ToolExecutionRequest.builder()
+						.id(tc.id())
+						.name(tc.name())
+						.arguments(tc.arguments().encode())
+						.build())
+					.collect(Collectors.toList());
+				return (dev.langchain4j.data.message.ChatMessage) new AiMessage(text, requests);
 			} else {
-				return new AiMessage(text);
+				return (dev.langchain4j.data.message.ChatMessage) new AiMessage(text);
 			}
 		}).collect(Collectors.toList());
 	}
