@@ -17,11 +17,17 @@ import com.openai.models.FunctionDefinition;
 import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletion.Choice;
+import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
 import com.openai.models.chat.completions.ChatCompletionChunk;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
+import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
+import com.openai.models.chat.completions.ChatCompletionSystemMessageParam;
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
 
+import io.metaloom.ai.genai.llm.ChatMessage;
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
@@ -57,7 +63,7 @@ public class VLLMLLMProvider implements LLMProvider {
 		OpenAIClient client = buildClient(model.url());
 
 		ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
-				.addUserMessage(ctx.prompt().input())
+				.messages(convertHistory(ctx.chatHistory()))
 				.temperature(ctx.temperature())
 				.model(model.id()).build();
 		ChatCompletion chatCompletion = client.chat().completions().create(params);
@@ -176,6 +182,44 @@ public class VLLMLLMProvider implements LLMProvider {
 				.collect(Collectors.toList());
 		}
 		return new ToolCallResponse(content, toolCalls);
+	}
+
+	private List<ChatCompletionMessageParam> convertHistory(List<? extends ChatMessage> chatHistory) {
+		return chatHistory.stream().map(entry -> {
+			String role = entry.getRole().toLowerCase();
+			String text = entry.getText();
+			if (role.equalsIgnoreCase("user")) {
+				return ChatCompletionMessageParam.ofUser(
+					ChatCompletionUserMessageParam.builder().content(text).build());
+			} else if (role.equalsIgnoreCase("system")) {
+				return ChatCompletionMessageParam.ofSystem(
+					ChatCompletionSystemMessageParam.builder().content(text).build());
+			} else if (role.equalsIgnoreCase("tool")) {
+				return ChatCompletionMessageParam.ofTool(
+					ChatCompletionToolMessageParam.builder()
+						.toolCallId(entry.getToolCallId())
+						.content(text)
+						.build());
+			} else if (role.equalsIgnoreCase("assistant") && !entry.getToolCalls().isEmpty()) {
+				ChatCompletionAssistantMessageParam.Builder builder = ChatCompletionAssistantMessageParam.builder();
+				if (text != null) {
+					builder.content(text);
+				}
+				for (ToolCall tc : entry.getToolCalls()) {
+					builder.addToolCall(ChatCompletionMessageFunctionToolCall.builder()
+						.id(tc.id())
+						.function(ChatCompletionMessageFunctionToolCall.Function.builder()
+							.name(tc.name())
+							.arguments(tc.arguments().encode())
+							.build())
+						.build());
+				}
+				return ChatCompletionMessageParam.ofAssistant(builder.build());
+			} else {
+				return ChatCompletionMessageParam.ofAssistant(
+					ChatCompletionAssistantMessageParam.builder().content(text).build());
+			}
+		}).collect(Collectors.toList());
 	}
 
 	private FunctionParameters convertToFunctionParameters(JsonObject params) {
