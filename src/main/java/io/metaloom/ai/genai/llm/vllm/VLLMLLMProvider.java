@@ -1,5 +1,6 @@
 package io.metaloom.ai.genai.llm.vllm;
 
+import java.nio.Buffer;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +21,7 @@ import com.openai.models.chat.completions.ChatCompletion.Choice;
 import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
 import com.openai.models.chat.completions.ChatCompletionChunk;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
+import com.openai.models.chat.completions.ChatCompletionCreateParams.Builder;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
@@ -51,8 +53,7 @@ public class VLLMLLMProvider implements LLMProvider {
 	private static final Logger logger = LoggerFactory.getLogger(VLLMLLMProvider.class);
 
 	/**
-	 * Buffer size for stream response (measured in number of tokens) for the case
-	 * where stream consumer is slower than the producer. If the backpressure is
+	 * Buffer size for stream response (measured in number of tokens) for the case where stream consumer is slower than the producer. If the backpressure is
 	 * bigger than that,
 	 */
 	private static final int STREAMING_BUFFER_SIZE = 8192;
@@ -62,17 +63,35 @@ public class VLLMLLMProvider implements LLMProvider {
 		LargeLanguageModel model = ctx.model();
 		OpenAIClient client = buildClient(model.url());
 
-		ChatCompletionCreateParams params = ChatCompletionCreateParams.builder()
-				.messages(convertHistory(ctx.chatHistory()))
-				.temperature(ctx.temperature())
-				.model(model.id()).build();
+		Builder builder = ChatCompletionCreateParams.builder()
+			.messages(convertHistory(ctx.chatHistory()))
+			.temperature(ctx.temperature())
+			.model(model.id());
+
+		if (ctx.isThinkEnabled()) {
+			logger.info("Enable thinking mode");
+			builder = builder.putAdditionalBodyProperty(
+				"chat_template_kwargs",
+				JsonValue.from(Map.of(
+					"enable_thinking", true)));
+		}
+
+		ChatCompletionCreateParams params = builder.build();
 		ChatCompletion chatCompletion = client.chat().completions().create(params);
 
 		Choice firstChoice = chatCompletion.choices().getFirst();
+		// llama.cpp (started with --reasoning auto) and other OpenAI-compatible servers
+		// expose the reasoning trace in a separate, non-standard "reasoning_content"
+		// field on the message. Surface it when thinking is enabled so the caller can
+		// observe it. The OpenAI Java SDK exposes unknown fields via _additionalProperties().
+		if (ctx.isThinkEnabled()) {
+			String reasoning = extractReasoningContent(firstChoice.message()._additionalProperties());
+			if (reasoning != null && !reasoning.isEmpty()) {
+				logger.info("Reasoning content:\n{}", reasoning);
+			}
+		}
 		return firstChoice.message().content().orElseThrow();
 	}
-
-	
 
 	@Override
 	public JsonObject generateJson(LLMContext ctx) {
@@ -87,7 +106,7 @@ public class VLLMLLMProvider implements LLMProvider {
 		OpenAIClient client = buildClient(model.url());
 
 		ChatCompletionCreateParams params = ChatCompletionCreateParams.builder().addUserMessage(ctx.prompt().input())
-				.model(model.id()).build();
+			.model(model.id()).build();
 		StreamResponse<ChatCompletionChunk> streamResponse = client.chat().completions().createStreaming(params);
 
 		FlowableOnSubscribe<Chunk> tokenObserver = emitter -> {
@@ -96,7 +115,7 @@ public class VLLMLLMProvider implements LLMProvider {
 				// cancel the upstream flow when the downstream cancels the flow
 				emitter.setCancellable(() -> {
 					logger.info(
-							"The downstream subscriber cancelled the subscription. Closing OpenAI stream response.");
+						"The downstream subscriber cancelled the subscription. Closing OpenAI stream response.");
 					streamResponse.close();
 				});
 
@@ -104,37 +123,47 @@ public class VLLMLLMProvider implements LLMProvider {
 				// observable
 				AtomicBoolean inThinkingArea = new AtomicBoolean(false);
 				streamResponse.stream().filter(c -> !c.choices().isEmpty()).map(c -> c.choices().getFirst())
-						.peek(choice -> {
-							if (choice.finishReason().isPresent()) {
-								logger.debug("LLM processing finishes with reason: {}", choice.finishReason());
-							}
-						}).filter(choice -> choice.delta().content().isPresent()).map(choice -> {
-							String tokenStr = choice.delta().content().orElseThrow();
-							boolean toggleArea = ReasoningUtils.isThinkingStartEndToken(tokenStr);
-							boolean isThinking = toggleArea || inThinkingArea.get() == true;
-							Chunk token = new ChunkImpl(tokenStr, isThinking);
-							if (toggleArea) {
-								logger.info("Toggling reasoning area flag");
-								inThinkingArea.set(!inThinkingArea.get());
-							}
-							return token;
-						}).forEach(emitter::onNext);
+					.peek(choice -> {
+						if (choice.finishReason().isPresent()) {
+							logger.debug("LLM processing finishes with reason: {}", choice.finishReason());
+						}
+					})
+					.peek(choice -> {
+						// Surface reasoning_content emitted as a separate field by
+						// llama.cpp (--reasoning auto) and similar OpenAI-compatible
+						// servers that pre-split the thinking trace out of `content`.
+						String reasoning = extractReasoningContent(choice.delta()._additionalProperties());
+						if (reasoning != null && !reasoning.isEmpty()) {
+							emitter.onNext(new ChunkImpl(reasoning, true));
+						}
+					})
+					.filter(choice -> choice.delta().content().isPresent()).map(choice -> {
+						String tokenStr = choice.delta().content().orElseThrow();
+						boolean toggleArea = ReasoningUtils.isThinkingStartEndToken(tokenStr);
+						boolean isThinking = toggleArea || inThinkingArea.get() == true;
+						Chunk token = new ChunkImpl(tokenStr, isThinking);
+						if (toggleArea) {
+							logger.info("Toggling reasoning area flag");
+							inThinkingArea.set(!inThinkingArea.get());
+						}
+						return token;
+					}).forEach(emitter::onNext);
 
 				// complete the downstream observable after reaching the end of the upstream
 				// stream
 				emitter.onComplete();
 			} catch (Exception e) {
 				logger.error("Caught an unexpected exception type while generating stream response: {}",
-						e.getMessage());
+					e.getMessage());
 				emitter.onError(new LLMException(
-						"An error occurred while processing the LLM token stream: " + e.getMessage(), e));
+					"An error occurred while processing the LLM token stream: " + e.getMessage(), e));
 			}
 		};
 
 		return Flowable.create(tokenObserver, BackpressureStrategy.BUFFER)
-				.onBackpressureBuffer(STREAMING_BUFFER_SIZE, () -> {
-					throw new LLMException("LLM Token Buffer overflow. Consumer was too slow.");
-				}).subscribeOn(Schedulers.io());
+			.onBackpressureBuffer(STREAMING_BUFFER_SIZE, () -> {
+				throw new LLMException("LLM Token Buffer overflow. Consumer was too slow.");
+			}).subscribeOn(Schedulers.io());
 	}
 
 	@Override
@@ -233,13 +262,35 @@ public class VLLMLLMProvider implements LLMProvider {
 		}
 		return builder.build();
 	}
-	
+
 	private OpenAIClient buildClient(String url) {
 		OpenAIClient client = OpenAIOkHttpClient.builder()
-				.baseUrl(url)
-				.apiKey("bogus")
-				.build();
+			.baseUrl(url)
+			.apiKey("bogus")
+			.build();
 		return client;
+	}
+
+	/**
+	 * Extract the value of the non-standard "reasoning_content" field that llama.cpp
+	 * (when started with --reasoning auto) and other OpenAI-compatible servers add to
+	 * the chat message / delta to expose the model's chain-of-thought separately
+	 * from the regular response content.
+	 *
+	 * @param additionalProperties additional/unknown properties map provided by the
+	 *                             OpenAI Java SDK on a message or streaming delta
+	 * @return the reasoning text, or {@code null} when no such field is present
+	 */
+	private static String extractReasoningContent(Map<String, JsonValue> additionalProperties) {
+		if (additionalProperties == null) {
+			return null;
+		}
+		JsonValue value = additionalProperties.get("reasoning_content");
+		if (value == null) {
+			return null;
+		}
+		Object raw = value.asString().orElse(null);
+		return raw instanceof String ? (String) raw : null;
 	}
 
 }
