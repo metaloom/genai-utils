@@ -27,6 +27,7 @@ import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.PartialThinking;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel.OllamaChatModelBuilder;
@@ -40,6 +41,7 @@ import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
 import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
+import io.metaloom.ai.genai.llm.StreamEvent;
 import io.metaloom.ai.genai.llm.ToolCall;
 import io.metaloom.ai.genai.llm.ToolCallResponse;
 import io.metaloom.ai.genai.llm.ToolDefinition;
@@ -47,6 +49,7 @@ import io.metaloom.ai.genai.llm.impl.ChunkImpl;
 import io.metaloom.ai.genai.utils.TextUtils;
 import io.reactivex.rxjava3.core.BackpressureStrategy;
 import io.reactivex.rxjava3.core.Flowable;
+import io.reactivex.rxjava3.core.FlowableEmitter;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
@@ -144,6 +147,11 @@ public class OllamaLLMProvider implements LLMProvider {
 				}
 
 				@Override
+				public void onPartialThinking(PartialThinking partialThinking) {
+					sub.onNext(new ChunkImpl(partialThinking.text(), true));
+				}
+
+				@Override
 				public void onCompleteResponse(ChatResponse completeResponse) {
 					logger.info("Ollama call completed with msg.");
 					sub.onComplete();
@@ -151,6 +159,72 @@ public class OllamaLLMProvider implements LLMProvider {
 
 			});
 		}, BackpressureStrategy.BUFFER);
+	}
+
+	@Override
+	public Flowable<StreamEvent> generateStreamWithTools(LLMContext ctx) {
+		LargeLanguageModel llm = ctx.model();
+		String url = llm.url();
+		logger.debug("Using server {} for model {} (streaming tool calling)", url, llm);
+
+		OllamaStreamingChatModelBuilder builder = OllamaStreamingChatModel.builder()
+			.baseUrl(url)
+			.timeout(Duration.ofMinutes(15))
+			.modelName(ctx.model().id())
+			.think(ctx.isThinkEnabled())
+			.temperature(ctx.temperature());
+
+		if (ctx.seed() != null) {
+			builder.seed(ctx.seed());
+		}
+
+		OllamaStreamingChatModel model = builder.build();
+
+		List<dev.langchain4j.data.message.ChatMessage> msgs = convertHistory(ctx.chatHistory());
+		List<ToolSpecification> toolSpecs = convertToolDefinitions(ctx.tools());
+
+		return Flowable.create(sub -> {
+			ChatRequest request = ChatRequest.builder()
+				.messages(msgs)
+				.toolSpecifications(toolSpecs)
+				.build();
+			model.doChat(request, streamEventHandler(sub));
+		}, BackpressureStrategy.BUFFER);
+	}
+
+	/**
+	 * Map langchain4j streaming callbacks onto {@link StreamEvent}s. Package-visible for testing.
+	 */
+	static StreamingChatResponseHandler streamEventHandler(FlowableEmitter<StreamEvent> sub) {
+		return new StreamingChatResponseHandler() {
+
+			@Override
+			public void onError(Throwable error) {
+				logger.error("Error while processing ollama request", error);
+				sub.onError(error);
+			}
+
+			@Override
+			public void onPartialResponse(String partialResponse) {
+				sub.onNext(new StreamEvent.TextDelta(partialResponse));
+			}
+
+			@Override
+			public void onPartialThinking(PartialThinking partialThinking) {
+				sub.onNext(new StreamEvent.ReasoningDelta(partialThinking.text()));
+			}
+
+			@Override
+			public void onCompleteResponse(ChatResponse completeResponse) {
+				AiMessage aiMessage = completeResponse.aiMessage();
+				if (aiMessage.hasToolExecutionRequests()) {
+					sub.onNext(new StreamEvent.ToolCallsComplete(toToolCalls(aiMessage.toolExecutionRequests())));
+				}
+				sub.onNext(new StreamEvent.Completed(aiMessage.text()));
+				sub.onComplete();
+			}
+
+		};
 	}
 
 	private List<dev.langchain4j.data.message.ChatMessage> convertHistory(List<? extends ChatMessage> chatHistory) {
@@ -224,14 +298,18 @@ public class OllamaLLMProvider implements LLMProvider {
 		String content = aiMessage.text();
 		List<ToolCall> toolCalls = Collections.emptyList();
 		if (aiMessage.hasToolExecutionRequests()) {
-			toolCalls = aiMessage.toolExecutionRequests().stream()
-				.map(req -> new ToolCall(
-					req.id(),
-					req.name(),
-					new JsonObject(req.arguments())))
-				.collect(Collectors.toList());
+			toolCalls = toToolCalls(aiMessage.toolExecutionRequests());
 		}
 		return new ToolCallResponse(content, toolCalls);
+	}
+
+	static List<ToolCall> toToolCalls(List<ToolExecutionRequest> requests) {
+		return requests.stream()
+			.map(req -> new ToolCall(
+				req.id(),
+				req.name(),
+				new JsonObject(req.arguments())))
+			.collect(Collectors.toList());
 	}
 
 	private List<ToolSpecification> convertToolDefinitions(List<ToolDefinition> tools) {
