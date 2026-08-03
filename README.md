@@ -12,9 +12,6 @@ This project contains utilities to be used for generative ai.
 </dependency>
 ```
 
-## Attribution
-
-Portions of the code in this project were co-authored with the assistance of AI.
 
 ## Release Process
 

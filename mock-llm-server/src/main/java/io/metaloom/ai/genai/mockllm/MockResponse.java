@@ -55,7 +55,8 @@ public sealed interface MockResponse {
 
     /**
      * A response that triggers tool / function calling (finish_reason = "tool_calls").
-     * The message content will be {@code null} as per the OpenAI spec.
+     * The message content will be {@code null} as per the OpenAI spec. When the client asks for a
+     * stream the calls are emitted as {@code tool_calls} delta fragments instead of one body.
      *
      * @param toolCalls one or more tool calls the model wants to make
      */

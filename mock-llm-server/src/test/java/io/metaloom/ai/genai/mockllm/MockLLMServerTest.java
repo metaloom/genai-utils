@@ -14,14 +14,14 @@ import org.junit.jupiter.api.Test;
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
-import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
+import io.metaloom.ai.genai.llm.StreamEvent;
 import io.metaloom.ai.genai.llm.ToolCallResponse;
 import io.metaloom.ai.genai.llm.ToolDefinition;
 import io.metaloom.ai.genai.llm.impl.LargeLanguageModelImpl;
+import io.metaloom.ai.genai.llm.openai.OpenAILLMProvider;
 import io.metaloom.ai.genai.llm.prompt.Prompt;
 import io.metaloom.ai.genai.llm.prompt.impl.PromptImpl;
-import io.metaloom.ai.genai.llm.vllm.VLLMLLMProvider;
 import io.metaloom.ai.genai.mockllm.MockResponse.ErrorResponse;
 import io.metaloom.ai.genai.mockllm.MockResponse.MockToolCall;
 import io.metaloom.ai.genai.mockllm.MockResponse.ToolCallsResponse;
@@ -29,13 +29,13 @@ import io.vertx.core.json.JsonObject;
 
 /**
  * Verifies the behaviour of {@link MockLLMServer} by driving it through the real genai-utils
- * OpenAI-compatible client ({@link VLLMLLMProvider}) — the exact code path the metaloom chat
+ * OpenAI-compatible client ({@link OpenAILLMProvider}) — the exact code path the metaloom chat
  * agent uses at runtime.
  */
 class MockLLMServerTest {
 
 	private MockLLMServer server;
-	private final LLMProvider provider = new VLLMLLMProvider();
+	private final LLMProvider provider = new OpenAILLMProvider();
 
 	@BeforeEach
 	void setUp() {
@@ -51,12 +51,23 @@ class MockLLMServerTest {
 
 	/** A model pointing at the freshly-started mock server. */
 	private LargeLanguageModel model() {
-		return new LargeLanguageModelImpl("mock-model", server.baseUrl(), 2048, LLMProviderType.VLLM);
+		return new LargeLanguageModelImpl("mock-model", server.baseUrl(), 2048);
 	}
 
 	private LLMContext chatCtx(String userMessage) {
 		Prompt prompt = new PromptImpl(userMessage);
 		return LLMContext.ctx(prompt, model());
+	}
+
+	private static ToolDefinition weatherTool() {
+		return new ToolDefinition(
+				"get_weather",
+				"Get the current weather for a city",
+				new JsonObject()
+						.put("type", "object")
+						.put("properties", new JsonObject()
+								.put("city", new JsonObject().put("type", "string")))
+						.put("required", List.of("city")));
 	}
 
 	@Test
@@ -97,17 +108,8 @@ class MockLLMServerTest {
 		MockToolCall toolCall = MockToolCall.of("get_weather", new JsonObject().put("city", "Vienna"));
 		server.addToolCallsResponse(ToolCallsResponse.of(toolCall)).start();
 
-		ToolDefinition weatherTool = new ToolDefinition(
-				"get_weather",
-				"Get the current weather for a city",
-				new JsonObject()
-						.put("type", "object")
-						.put("properties", new JsonObject()
-								.put("city", new JsonObject().put("type", "string")))
-						.put("required", List.of("city")));
-
 		LLMContext ctx = chatCtx("What is the weather in Vienna?");
-		ctx.setTools(List.of(weatherTool));
+		ctx.setTools(List.of(weatherTool()));
 
 		ToolCallResponse response = provider.generateWithTools(ctx);
 
@@ -132,6 +134,70 @@ class MockLLMServerTest {
 				.reduce("", String::concat);
 
 		assertEquals(expected, collected);
+	}
+
+	@Test
+	void testStreamingToolCallResponse() {
+		MockToolCall toolCall = MockToolCall.of("get_weather", new JsonObject().put("city", "Vienna"));
+		server.addToolCallsResponse(ToolCallsResponse.of(toolCall)).start();
+
+		LLMContext ctx = chatCtx("What is the weather in Vienna?");
+		ctx.setTools(List.of(weatherTool()));
+
+		List<StreamEvent> events = provider.generateStreamWithTools(ctx).toList().blockingGet();
+
+		// The fragments must be reassembled into exactly one complete call...
+		List<StreamEvent.ToolCallsComplete> completed = events.stream()
+				.filter(StreamEvent.ToolCallsComplete.class::isInstance)
+				.map(StreamEvent.ToolCallsComplete.class::cast)
+				.toList();
+		assertEquals(1, completed.size());
+		assertEquals(1, completed.getFirst().toolCalls().size());
+		assertEquals("get_weather", completed.getFirst().toolCalls().getFirst().name());
+		assertEquals("Vienna", completed.getFirst().toolCalls().getFirst().arguments().getString("city"));
+
+		// ...and the stream must terminate with Completed as its last event.
+		assertTrue(events.getLast() instanceof StreamEvent.Completed);
+	}
+
+	@Test
+	void testStreamingParallelToolCalls() {
+		server.addToolCallsResponse(new ToolCallsResponse(List.of(
+				MockToolCall.of("get_weather", new JsonObject().put("city", "Tokyo")),
+				MockToolCall.of("get_weather", new JsonObject().put("city", "Berlin"))))).start();
+
+		LLMContext ctx = chatCtx("Weather in Tokyo and Berlin?");
+		ctx.setTools(List.of(weatherTool()));
+
+		List<StreamEvent> events = provider.generateStreamWithTools(ctx).toList().blockingGet();
+
+		StreamEvent.ToolCallsComplete completed = events.stream()
+				.filter(StreamEvent.ToolCallsComplete.class::isInstance)
+				.map(StreamEvent.ToolCallsComplete.class::cast)
+				.findFirst()
+				.orElseThrow();
+		assertEquals(2, completed.toolCalls().size());
+		assertEquals("Tokyo", completed.toolCalls().get(0).arguments().getString("city"));
+		assertEquals("Berlin", completed.toolCalls().get(1).arguments().getString("city"));
+	}
+
+	@Test
+	void testStreamingWithToolsEmitsTextWhenNoToolIsCalled() {
+		server.addResponse("No tool needed here.").start();
+
+		LLMContext ctx = chatCtx("Just say something");
+		ctx.setTools(List.of(weatherTool()));
+
+		List<StreamEvent> events = provider.generateStreamWithTools(ctx).toList().blockingGet();
+
+		String text = events.stream()
+				.filter(StreamEvent.TextDelta.class::isInstance)
+				.map(e -> ((StreamEvent.TextDelta) e).text())
+				.reduce("", String::concat);
+		assertEquals("No tool needed here.", text);
+
+		assertTrue(events.stream().noneMatch(StreamEvent.ToolCallsComplete.class::isInstance));
+		assertEquals("No tool needed here.", ((StreamEvent.Completed) events.getLast()).fullText());
 	}
 
 	@Test

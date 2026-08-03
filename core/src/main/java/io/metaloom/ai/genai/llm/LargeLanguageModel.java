@@ -18,15 +18,8 @@ public interface LargeLanguageModel {
 
 	/**
 	 * Return the context window size of the LLM.
-	 * 
+	 *
 	 * @return
 	 */
 	long contextWindow();
-
-	/**
-	 * Vendor / Provider of the LLM service for the model.
-	 * 
-	 * @return
-	 */
-	LLMProviderType providerType();
 }

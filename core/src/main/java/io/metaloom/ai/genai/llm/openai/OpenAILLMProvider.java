@@ -1,7 +1,8 @@
-package io.metaloom.ai.genai.llm.vllm;
+package io.metaloom.ai.genai.llm.openai;
 
-import java.nio.Buffer;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -33,8 +34,8 @@ import io.metaloom.ai.genai.llm.ChatMessage;
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
-import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
+import io.metaloom.ai.genai.llm.StreamEvent;
 import io.metaloom.ai.genai.llm.ToolCall;
 import io.metaloom.ai.genai.llm.ToolCallResponse;
 import io.metaloom.ai.genai.llm.ToolDefinition;
@@ -48,9 +49,13 @@ import io.reactivex.rxjava3.core.FlowableOnSubscribe;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import io.vertx.core.json.JsonObject;
 
-public class VLLMLLMProvider implements LLMProvider {
+/**
+ * The one LLM provider: it speaks the OpenAI chat-completions protocol and therefore drives any
+ * server exposing it — llama.cpp, vLLM, Ollama's {@code /v1} endpoint, OpenAI itself.
+ */
+public class OpenAILLMProvider implements LLMProvider {
 
-	private static final Logger logger = LoggerFactory.getLogger(VLLMLLMProvider.class);
+	private static final Logger logger = LoggerFactory.getLogger(OpenAILLMProvider.class);
 
 	/**
 	 * Buffer size for stream response (measured in number of tokens) for the case where stream consumer is slower than the producer. If the backpressure is
@@ -67,14 +72,7 @@ public class VLLMLLMProvider implements LLMProvider {
 			.messages(convertHistory(ctx.chatHistory()))
 			.temperature(ctx.temperature())
 			.model(model.id());
-
-		if (ctx.isThinkEnabled()) {
-			logger.info("Enable thinking mode");
-			builder = builder.putAdditionalBodyProperty(
-				"chat_template_kwargs",
-				JsonValue.from(Map.of(
-					"enable_thinking", true)));
-		}
+		applyThinking(builder, ctx);
 
 		ChatCompletionCreateParams params = builder.build();
 		ChatCompletion chatCompletion = client.chat().completions().create(params);
@@ -105,8 +103,11 @@ public class VLLMLLMProvider implements LLMProvider {
 		LargeLanguageModel model = ctx.model();
 		OpenAIClient client = buildClient(model.url());
 
-		ChatCompletionCreateParams params = ChatCompletionCreateParams.builder().addUserMessage(ctx.prompt().input())
-			.model(model.id()).build();
+		Builder builder = ChatCompletionCreateParams.builder().addUserMessage(ctx.prompt().input())
+			.model(model.id());
+		applyThinking(builder, ctx);
+
+		ChatCompletionCreateParams params = builder.build();
 		StreamResponse<ChatCompletionChunk> streamResponse = client.chat().completions().createStreaming(params);
 
 		FlowableOnSubscribe<Chunk> tokenObserver = emitter -> {
@@ -167,8 +168,82 @@ public class VLLMLLMProvider implements LLMProvider {
 	}
 
 	@Override
-	public LLMProviderType type() {
-		return LLMProviderType.VLLM;
+	public Flowable<StreamEvent> generateStreamWithTools(LLMContext ctx) {
+		LargeLanguageModel model = ctx.model();
+		OpenAIClient client = buildClient(model.url());
+
+		Builder paramsBuilder = ChatCompletionCreateParams.builder()
+			.messages(convertHistory(ctx.chatHistory()))
+			.temperature(ctx.temperature())
+			.model(model.id());
+		applyThinking(paramsBuilder, ctx);
+		addTools(paramsBuilder, ctx.tools());
+
+		ChatCompletionCreateParams params = paramsBuilder.build();
+		StreamResponse<ChatCompletionChunk> streamResponse = client.chat().completions().createStreaming(params);
+
+		FlowableOnSubscribe<StreamEvent> eventObserver = emitter -> {
+			logger.debug("Starting streaming tool-call generation for {}", params);
+			try {
+				emitter.setCancellable(() -> {
+					logger.info("The downstream subscriber cancelled the subscription. Closing OpenAI stream response.");
+					streamResponse.close();
+				});
+
+				StringBuilder fullText = new StringBuilder();
+				ToolCallAccumulator toolCalls = new ToolCallAccumulator();
+				AtomicBoolean inThinkingArea = new AtomicBoolean(false);
+
+				streamResponse.stream().filter(c -> !c.choices().isEmpty()).map(c -> c.choices().getFirst())
+					.forEach(choice -> {
+						if (choice.finishReason().isPresent()) {
+							logger.debug("LLM processing finishes with reason: {}", choice.finishReason());
+						}
+
+						// Servers that pre-split the thinking trace carry it in the
+						// non-standard "reasoning_content" delta field.
+						String reasoning = extractReasoningContent(choice.delta()._additionalProperties());
+						if (reasoning != null && !reasoning.isEmpty()) {
+							emitter.onNext(new StreamEvent.ReasoningDelta(reasoning));
+						}
+
+						choice.delta().content().ifPresent(text -> {
+							// Models that inline their reasoning delimit it with <think>
+							// markers inside the regular content stream instead.
+							boolean toggleArea = ReasoningUtils.isThinkingStartEndToken(text);
+							boolean isThinking = toggleArea || inThinkingArea.get();
+							if (toggleArea) {
+								inThinkingArea.set(!inThinkingArea.get());
+							}
+							if (isThinking) {
+								emitter.onNext(new StreamEvent.ReasoningDelta(text));
+							} else {
+								fullText.append(text);
+								emitter.onNext(new StreamEvent.TextDelta(text));
+							}
+						});
+
+						choice.delta().toolCalls().ifPresent(toolCalls::accept);
+					});
+
+				List<ToolCall> calls = toolCalls.toToolCalls();
+				if (!calls.isEmpty()) {
+					emitter.onNext(new StreamEvent.ToolCallsComplete(calls));
+				}
+				emitter.onNext(new StreamEvent.Completed(fullText.isEmpty() ? null : fullText.toString()));
+				emitter.onComplete();
+			} catch (Exception e) {
+				logger.error("Caught an unexpected exception type while generating streaming tool calls: {}",
+					e.getMessage());
+				emitter.onError(new LLMException(
+					"An error occurred while processing the LLM token stream: " + e.getMessage(), e));
+			}
+		};
+
+		return Flowable.create(eventObserver, BackpressureStrategy.BUFFER)
+			.onBackpressureBuffer(STREAMING_BUFFER_SIZE, () -> {
+				throw new LLMException("LLM Token Buffer overflow. Consumer was too slow.");
+			}).subscribeOn(Schedulers.io());
 	}
 
 	@Override
@@ -176,20 +251,12 @@ public class VLLMLLMProvider implements LLMProvider {
 		LargeLanguageModel model = ctx.model();
 		OpenAIClient client = buildClient(model.url());
 
-		ChatCompletionCreateParams.Builder paramsBuilder = ChatCompletionCreateParams.builder()
+		Builder paramsBuilder = ChatCompletionCreateParams.builder()
 			.addUserMessage(ctx.prompt().input())
 			.temperature(ctx.temperature())
 			.model(model.id());
 
-		// Add tool definitions
-		for (ToolDefinition tool : ctx.tools()) {
-			FunctionDefinition funcDef = FunctionDefinition.builder()
-				.name(tool.name())
-				.description(tool.description())
-				.parameters(convertToFunctionParameters(tool.parameters()))
-				.build();
-			paramsBuilder.addFunctionTool(funcDef);
-		}
+		addTools(paramsBuilder, ctx.tools());
 
 		ChatCompletionCreateParams params = paramsBuilder.build();
 		ChatCompletion chatCompletion = client.chat().completions().create(params);
@@ -211,6 +278,77 @@ public class VLLMLLMProvider implements LLMProvider {
 				.collect(Collectors.toList());
 		}
 		return new ToolCallResponse(content, toolCalls);
+	}
+
+	/**
+	 * Collects the {@code tool_calls} fragments of a streamed response. A server spreads one tool
+	 * call over several chunks: the first carries the id and the function name, the ones after it
+	 * carry successive slices of the argument JSON. Fragments are keyed by the {@code index} the
+	 * server assigns, which is what keeps parallel tool calls apart.
+	 */
+	static final class ToolCallAccumulator {
+
+		private final Map<Long, Fragment> fragments = new LinkedHashMap<>();
+
+		private static final class Fragment {
+			private String id;
+			private String name;
+			private final StringBuilder arguments = new StringBuilder();
+		}
+
+		void accept(List<ChatCompletionChunk.Choice.Delta.ToolCall> deltas) {
+			for (ChatCompletionChunk.Choice.Delta.ToolCall delta : deltas) {
+				Fragment fragment = fragments.computeIfAbsent(delta.index(), k -> new Fragment());
+				delta.id().ifPresent(id -> fragment.id = id);
+				delta.function().ifPresent(function -> {
+					function.name().ifPresent(name -> fragment.name = name);
+					function.arguments().ifPresent(fragment.arguments::append);
+				});
+			}
+		}
+
+		List<ToolCall> toToolCalls() {
+			List<ToolCall> calls = new ArrayList<>();
+			for (Fragment fragment : fragments.values()) {
+				if (fragment.name == null) {
+					// Without a function name there is nothing to dispatch to.
+					logger.warn("Discarding a streamed tool call without a function name");
+					continue;
+				}
+				String args = fragment.arguments.isEmpty() ? "{}" : fragment.arguments.toString();
+				calls.add(new ToolCall(fragment.id, fragment.name, new JsonObject(args)));
+			}
+			return calls;
+		}
+	}
+
+	private void addTools(Builder builder, List<ToolDefinition> tools) {
+		if (tools == null) {
+			return;
+		}
+		for (ToolDefinition tool : tools) {
+			FunctionDefinition funcDef = FunctionDefinition.builder()
+				.name(tool.name())
+				.description(tool.description())
+				.parameters(convertToFunctionParameters(tool.parameters()))
+				.build();
+			builder.addFunctionTool(funcDef);
+		}
+	}
+
+	/**
+	 * Ask the server to run the model in reasoning mode. {@code chat_template_kwargs} is how
+	 * llama.cpp and vLLM pass the flag into the chat template; servers that do not know the field
+	 * ignore it.
+	 */
+	private void applyThinking(Builder builder, LLMContext ctx) {
+		if (ctx.isThinkEnabled()) {
+			logger.debug("Enable thinking mode");
+			builder.putAdditionalBodyProperty(
+				"chat_template_kwargs",
+				JsonValue.from(Map.of(
+					"enable_thinking", true)));
+		}
 	}
 
 	private List<ChatCompletionMessageParam> convertHistory(List<? extends ChatMessage> chatHistory) {

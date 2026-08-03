@@ -29,27 +29,11 @@
 			<version>${vertx.version}</version>
 		</dependency>
 
-		<!-- vLLM -->
+		<!-- LLM - any OpenAI-compatible server (llama.cpp, vLLM, Ollama /v1, OpenAI) -->
 		<dependency>
 		    <groupId>com.openai</groupId>
 		    <artifactId>openai-java</artifactId>
 		    <version>4.41.0</version>
-		</dependency>
-		<!-- LLM - OLLAMA -->
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-ollama</artifactId>
-			<version>${langchain4j-ollama.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-core</artifactId>
-			<version>${langchain4j-core.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>dev.langchain4j</groupId>
-			<artifactId>langchain4j-open-ai</artifactId>
-			<version>${langchain4j-core.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>com.fasterxml.jackson.core</groupId>
@@ -57,14 +41,6 @@
 			<version>2.16.1</version>
 		</dependency>
 
-		<!-- Azure -->
-		<!--
-		<dependency>
-			<groupId>com.azure</groupId>
-			<artifactId>azure-ai-openai</artifactId>
-			<version>1.0.0-beta.8</version>
-		</dependency>
-		-->
 		<dependency>
 			<groupId>commons-io</groupId>
 			<artifactId>commons-io</artifactId>

@@ -1,6 +1,5 @@
 package io.metaloom.ai.genai.llm.impl;
 
-import io.metaloom.ai.genai.llm.LLMProviderType;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
 
 public class LargeLanguageModelImpl implements LargeLanguageModel {
@@ -8,13 +7,11 @@ public class LargeLanguageModelImpl implements LargeLanguageModel {
 	private String id;
 	private String url;
 	private long contextWindow;
-	private LLMProviderType type;
 
-	public LargeLanguageModelImpl(String id, String url, int contextWindow, LLMProviderType type) {
+	public LargeLanguageModelImpl(String id, String url, int contextWindow) {
 		this.id = id;
 		this.url = url;
 		this.contextWindow = contextWindow;
-		this.type = type;
 	}
 
 	@Override
@@ -33,13 +30,8 @@ public class LargeLanguageModelImpl implements LargeLanguageModel {
 	}
 
 	@Override
-	public LLMProviderType providerType() {
-		return type;
-	}
-
-	@Override
 	public String toString() {
-		return "id:" + id + ",url:" + url + ",ctx:" + contextWindow + ",type:" + type.name();
+		return "id:" + id + ",url:" + url + ",ctx:" + contextWindow;
 	}
 
 }

@@ -10,14 +10,14 @@ import org.junit.jupiter.api.Test;
 
 import io.metaloom.ai.genai.llm.prompt.Prompt;
 import io.metaloom.ai.genai.llm.prompt.impl.PromptImpl;
-import io.metaloom.ai.genai.llm.vllm.VLLMLLMProvider;
+import io.metaloom.ai.genai.llm.openai.OpenAILLMProvider;
 import io.vertx.core.json.JsonObject;
 
-public class VLLMToolCallTest {
+public class OpenAIToolCallTest {
 
 	@Test
 	public void testToolCall() {
-		LargeLanguageModel model = VLLMTestModel.mistral24bQ8("http://localhost:11436/v1");
+		LargeLanguageModel model = TestModel.mistral24bQ8("http://localhost:11436/v1");
 		Prompt prompt = new PromptImpl("What is the current weather in Berlin?");
 		LLMContext ctx = LLMContext.ctx(prompt, model);
 
@@ -39,7 +39,7 @@ public class VLLMToolCallTest {
 
 		ctx.setTools(List.of(weatherTool));
 
-		LLMProvider provider = new VLLMLLMProvider();
+		LLMProvider provider = new OpenAILLMProvider();
 		ToolCallResponse response = provider.generateWithTools(ctx);
 		assertNotNull(response);
 		System.out.println("Content: " + response.content());
@@ -56,7 +56,7 @@ public class VLLMToolCallTest {
 
 	@Test
 	public void testMultipleTools() {
-		LargeLanguageModel model = VLLMTestModel.mistral24bQ8("http://localhost:11436/v1");
+		LargeLanguageModel model = TestModel.mistral24bQ8("http://localhost:11436/v1");
 		Prompt prompt = new PromptImpl("Look up the weather in Tokyo and convert 50 EUR to JPY");
 		LLMContext ctx = LLMContext.ctx(prompt, model);
 
@@ -86,7 +86,7 @@ public class VLLMToolCallTest {
 			new ToolDefinition("get_current_weather", "Get the current weather for a location", weatherParams),
 			new ToolDefinition("convert_currency", "Convert an amount between currencies", currencyParams)));
 
-		LLMProvider provider = new VLLMLLMProvider();
+		LLMProvider provider = new OpenAILLMProvider();
 		ToolCallResponse response = provider.generateWithTools(ctx);
 		assertNotNull(response);
 		System.out.println("Content: " + response.content());

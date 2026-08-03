@@ -1,24 +1,15 @@
 package io.metaloom.ai.genai.llm;
 
-public enum TestModel implements LargeLanguageModel {
-
-	OLLAMA_GEMMA2_27B("gemma2:27b", LLMProviderType.OLLAMA),
-
-	OLLAMA_GEMMA3_27B_Q8("gemma3:27b-it-q8_0", LLMProviderType.OLLAMA),
-
-	OLLAMA_GEMMA3_12B_Q8("gemma3:12b-it-q8_0", LLMProviderType.OLLAMA),
-
-	OLLAMA_MAGISTRAL_24B("magistral:24b", LLMProviderType.OLLAMA),
-
-	OLLAMA_GPT_OSS_20B("gpt-oss:20b", LLMProviderType.OLLAMA);
+public class TestModel implements LargeLanguageModel {
 
 	private String id;
+	private String url;
+	private long ctxWindowSize;
 
-	private LLMProviderType providerType;
-
-	TestModel(String id, LLMProviderType type) {
+	public TestModel(String id, String url, long ctxWindowSize) {
 		this.id = id;
-		this.providerType = type;
+		this.url = url;
+		this.ctxWindowSize = ctxWindowSize;
 	}
 
 	@Override
@@ -28,17 +19,16 @@ public enum TestModel implements LargeLanguageModel {
 
 	@Override
 	public String url() {
-		return TestEnv.OLLAMA_URL;
+		return url;
 	}
 
 	@Override
 	public long contextWindow() {
-		return 4096;
+		return ctxWindowSize;
 	}
 
-	@Override
-	public LLMProviderType providerType() {
-		return providerType;
+	public static TestModel mistral24bQ8(String url) {
+		return new TestModel("mistralai/Mistral-Small-24B-Instruct-2501", url, 128_000);
 	}
 
 }

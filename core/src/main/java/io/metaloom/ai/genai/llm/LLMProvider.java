@@ -28,9 +28,5 @@ public interface LLMProvider {
 	 * @param ctx
 	 * @return stream of typed events
 	 */
-	default Flowable<StreamEvent> generateStreamWithTools(LLMContext ctx) {
-		throw new UnsupportedOperationException("Streaming with tools is not supported by the " + type() + " provider");
-	}
-
-	LLMProviderType type();
+	Flowable<StreamEvent> generateStreamWithTools(LLMContext ctx);
 }

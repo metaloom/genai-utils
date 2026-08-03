@@ -2,6 +2,7 @@ package io.metaloom.ai.genai.mockllm;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -32,7 +33,7 @@ import io.vertx.ext.web.handler.BodyHandler;
  * If the queue is empty the server returns a 500 error.
  *
  * <p>Both non-streaming (single JSON body) and streaming (Server-Sent Events, when the
- * client sends {@code "stream": true}) chat completions are supported.
+ * client sends {@code "stream": true}) chat completions are supported, tool calls included.
  *
  * <h3>Example usage</h3>
  * <pre>{@code
@@ -197,12 +198,15 @@ public final class MockLLMServer implements AutoCloseable {
                 case TruncatedResponse t -> respondContent(ctx, streaming, t.text(), "length");
                 case StructuredResponse s -> respondContent(ctx, streaming, s.json().encode(), "stop");
                 case ToolCallsResponse t -> {
-                    // Tool-call responses are always delivered as a single JSON body.
-                    String body = buildToolCallsBody(t);
-                    ctx.response()
-                            .setStatusCode(200)
-                            .putHeader("Content-Type", "application/json")
-                            .end(body);
+                    if (streaming) {
+                        streamToolCalls(ctx.response(), t);
+                    } else {
+                        String body = buildToolCallsBody(t);
+                        ctx.response()
+                                .setStatusCode(200)
+                                .putHeader("Content-Type", "application/json")
+                                .end(body);
+                    }
                 }
                 case ErrorResponse e -> {
                     String body = buildErrorBody(e.statusCode(), e.type(), e.code(), e.message(), e.param());
@@ -246,7 +250,7 @@ public final class MockLLMServer implements AutoCloseable {
         // HTTP/1.1. The handler above sets a "Connection: close" response header
         // which is required to force fresh TCP connections for HTTP/1.1 clients
         // (e.g. OkHttp used by the OpenAI SDK), but that header is prohibited in
-        // HTTP/2. Clients using the JDK HttpClient (langchain4j, newer OpenAI SDK)
+        // HTTP/2. Clients using the JDK HttpClient (newer OpenAI SDK)
         // default to HTTP/2 and would otherwise reject the response with
         // "malformed response: Prohibited header name 'connection'".
         httpServer = vertx.createHttpServer(new HttpServerOptions().setHttp2ClearTextEnabled(false));
@@ -399,6 +403,53 @@ public final class MockLLMServer implements AutoCloseable {
 
         // Final chunk carries the finish reason and an empty delta.
         response.write(sseEvent(streamChunk(id, created, new JsonObject(), finishReason)));
+        response.write("data: [DONE]\n\n");
+        response.end();
+    }
+
+    /**
+     * Emits tool calls the way a real OpenAI-compatible server streams them: the first chunk of a
+     * call carries its id and function name, later chunks carry successive slices of the argument
+     * JSON. The slices are deliberately split mid-token so a client that simply concatenates them
+     * per {@code index} is exercised properly.
+     */
+    private static void streamToolCalls(HttpServerResponse response, ToolCallsResponse toolCallsResponse) {
+        long created = System.currentTimeMillis() / 1000;
+        String id = "chatcmpl-mock-" + shortUuid();
+
+        response.setStatusCode(200)
+                .putHeader("Content-Type", "text/event-stream")
+                .putHeader("Cache-Control", "no-cache")
+                .setChunked(true);
+
+        response.write(sseEvent(streamChunk(id, created, new JsonObject().put("role", "assistant"), null)));
+
+        List<MockResponse.MockToolCall> calls = toolCallsResponse.toolCalls();
+        for (int index = 0; index < calls.size(); index++) {
+            MockResponse.MockToolCall call = calls.get(index);
+
+            // Opening fragment: id + function name, no arguments yet.
+            JsonObject head = new JsonObject()
+                    .put("index", index)
+                    .put("id", call.id())
+                    .put("type", "function")
+                    .put("function", new JsonObject().put("name", call.functionName()).put("arguments", ""));
+            response.write(sseEvent(streamChunk(id, created,
+                    new JsonObject().put("tool_calls", new JsonArray().add(head)), null)));
+
+            // Argument fragments: only index + the argument slice, as on the wire.
+            String arguments = call.argumentsJson();
+            for (int i = 0; i < arguments.length(); i += STREAM_CHUNK_SIZE) {
+                String piece = arguments.substring(i, Math.min(i + STREAM_CHUNK_SIZE, arguments.length()));
+                JsonObject fragment = new JsonObject()
+                        .put("index", index)
+                        .put("function", new JsonObject().put("arguments", piece));
+                response.write(sseEvent(streamChunk(id, created,
+                        new JsonObject().put("tool_calls", new JsonArray().add(fragment)), null)));
+            }
+        }
+
+        response.write(sseEvent(streamChunk(id, created, new JsonObject(), "tool_calls")));
         response.write("data: [DONE]\n\n");
         response.end();
     }
