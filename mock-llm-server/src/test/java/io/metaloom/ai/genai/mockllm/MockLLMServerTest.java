@@ -1,6 +1,7 @@
 package io.metaloom.ai.genai.mockllm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,11 +12,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.metaloom.ai.genai.llm.AbstractLLMContext;
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
+import io.metaloom.ai.genai.llm.LLMResponse;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
 import io.metaloom.ai.genai.llm.StreamEvent;
+import io.metaloom.ai.genai.llm.TokenUsage;
 import io.metaloom.ai.genai.llm.ToolCallResponse;
 import io.metaloom.ai.genai.llm.ToolDefinition;
 import io.metaloom.ai.genai.llm.impl.LargeLanguageModelImpl;
@@ -24,6 +28,7 @@ import io.metaloom.ai.genai.llm.prompt.Prompt;
 import io.metaloom.ai.genai.llm.prompt.impl.PromptImpl;
 import io.metaloom.ai.genai.mockllm.MockResponse.ErrorResponse;
 import io.metaloom.ai.genai.mockllm.MockResponse.MockToolCall;
+import io.metaloom.ai.genai.mockllm.MockResponse.MockUsage;
 import io.metaloom.ai.genai.mockllm.MockResponse.ToolCallsResponse;
 import io.vertx.core.json.JsonObject;
 
@@ -198,6 +203,101 @@ class MockLLMServerTest {
 
 		assertTrue(events.stream().noneMatch(StreamEvent.ToolCallsComplete.class::isInstance));
 		assertEquals("No tool needed here.", ((StreamEvent.Completed) events.getLast()).fullText());
+	}
+
+	@Test
+	void testUsageIsReportedForPlainResponse() {
+		server.usage(42, 7).addResponse("Hello World").start();
+
+		LLMResponse response = provider.generateResponse(chatCtx("Hi"));
+
+		assertEquals("Hello World", response.content());
+		assertEquals(42, response.usage().promptTokens());
+		assertEquals(7, response.usage().completionTokens());
+		assertEquals(49, response.usage().totalTokens());
+		assertTrue(response.usage().isReported());
+	}
+
+	@Test
+	void testUsageDetailsAreReported() {
+		server.usage(new MockUsage(80, 20, 12, 64)).addResponse("Thought about it.").start();
+
+		TokenUsage usage = provider.generateResponse(chatCtx("Think")).usage();
+
+		assertEquals(12, usage.reasoningTokens());
+		assertEquals(64, usage.cachedPromptTokens());
+	}
+
+	@Test
+	void testUsageIsReportedForToolCallResponse() {
+		MockToolCall toolCall = MockToolCall.of("get_weather", new JsonObject().put("city", "Vienna"));
+		server.usage(31, 11).addToolCallsResponse(ToolCallsResponse.of(toolCall)).start();
+
+		LLMContext ctx = chatCtx("What is the weather in Vienna?");
+		ctx.setTools(List.of(weatherTool()));
+
+		ToolCallResponse response = provider.generateWithTools(ctx);
+
+		assertTrue(response.hasToolCalls());
+		assertEquals(31, response.usage().promptTokens());
+		assertEquals(11, response.usage().completionTokens());
+		assertEquals(42, response.usage().totalTokens());
+	}
+
+	@Test
+	void testUsageIsReportedForStreamingResponse() {
+		String expected = "The quick brown fox jumps over the lazy dog.";
+		server.usage(17, 9).addResponse(expected).start();
+
+		List<Chunk> chunks = provider.generateStream(chatCtx("Tell me a sentence"))
+				.toList()
+				.blockingGet();
+
+		// The usage rides on one extra, text-less chunk so the text is unaffected.
+		String collected = chunks.stream()
+				.filter(c -> !c.isThinking())
+				.map(Object::toString)
+				.reduce("", String::concat);
+		assertEquals(expected, collected);
+
+		TokenUsage usage = chunks.getLast().usage();
+		assertEquals(17, usage.promptTokens());
+		assertEquals(9, usage.completionTokens());
+		assertEquals(26, usage.totalTokens());
+		assertTrue(chunks.stream().filter(c -> c.usage().isReported()).count() == 1,
+				"Exactly one chunk should carry the token accounting");
+	}
+
+	@Test
+	void testUsageIsReportedForStreamingToolCallResponse() {
+		MockToolCall toolCall = MockToolCall.of("get_weather", new JsonObject().put("city", "Vienna"));
+		server.usage(23, 5).addToolCallsResponse(ToolCallsResponse.of(toolCall)).start();
+
+		LLMContext ctx = chatCtx("What is the weather in Vienna?");
+		ctx.setTools(List.of(weatherTool()));
+
+		List<StreamEvent> events = provider.generateStreamWithTools(ctx).toList().blockingGet();
+
+		StreamEvent.Completed completed = (StreamEvent.Completed) events.getLast();
+		assertEquals(23, completed.usage().promptTokens());
+		assertEquals(5, completed.usage().completionTokens());
+		assertEquals(28, completed.usage().totalTokens());
+	}
+
+	@Test
+	void testStreamUsageCanBeDisabled() {
+		server.usage(17, 9).addResponse("No accounting please").start();
+
+		LLMContext ctx = chatCtx("Just talk");
+		((AbstractLLMContext) ctx).setStreamUsageEnabled(false);
+		ctx.setTools(List.of(weatherTool()));
+
+		List<StreamEvent> events = provider.generateStreamWithTools(ctx).toList().blockingGet();
+
+		// Without stream_options.include_usage the server sends no usage chunk at all.
+		StreamEvent.Completed completed = (StreamEvent.Completed) events.getLast();
+		assertEquals(TokenUsage.NONE, completed.usage());
+		assertFalse(completed.usage().isReported());
 	}
 
 	@Test

@@ -26,9 +26,20 @@ public sealed interface StreamEvent {
 	}
 
 	/**
-	 * The call finished. Carries the full response text (may be null when the model only produced tool calls).
+	 * The call finished. Carries the full response text (may be null when the model only produced tool calls) and the token accounting the server reported for
+	 * the call. The usage is {@link TokenUsage#NONE} when the server did not report any - see {@link LLMContext#isStreamUsageEnabled()}.
 	 */
-	record Completed(String fullText) implements StreamEvent {
+	record Completed(String fullText, TokenUsage usage) implements StreamEvent {
+
+		public Completed {
+			if (usage == null) {
+				usage = TokenUsage.NONE;
+			}
+		}
+
+		public Completed(String fullText) {
+			this(fullText, TokenUsage.NONE);
+		}
 	}
 
 }

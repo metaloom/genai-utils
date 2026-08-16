@@ -9,10 +9,16 @@ public class ToolCallResponse {
 
 	private final String content;
 	private final List<ToolCall> toolCalls;
+	private final TokenUsage usage;
 
 	public ToolCallResponse(String content, List<ToolCall> toolCalls) {
+		this(content, toolCalls, TokenUsage.NONE);
+	}
+
+	public ToolCallResponse(String content, List<ToolCall> toolCalls, TokenUsage usage) {
 		this.content = content;
 		this.toolCalls = toolCalls;
+		this.usage = usage == null ? TokenUsage.NONE : usage;
 	}
 
 	/**
@@ -42,9 +48,19 @@ public class ToolCallResponse {
 		return toolCalls != null && !toolCalls.isEmpty();
 	}
 
+	/**
+	 * Token accounting the server reported for this call. Never null - {@link TokenUsage#NONE} when
+	 * the server did not report any.
+	 *
+	 * @return
+	 */
+	public TokenUsage usage() {
+		return usage;
+	}
+
 	@Override
 	public String toString() {
 		return "ToolCallResponse[content=" + (content != null ? content.substring(0, Math.min(content.length(), 50)) : "null")
-			+ ", toolCalls=" + toolCalls + "]";
+			+ ", toolCalls=" + toolCalls + ", usage=" + usage + "]";
 	}
 }

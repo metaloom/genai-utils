@@ -25,6 +25,8 @@ public abstract class AbstractLLMContext implements LLMContext {
 
     private List<ToolDefinition> tools = Collections.emptyList();
 
+    private boolean streamUsage = true;
+
     public AbstractLLMContext(List<? extends ChatMessage> chatHistory, LargeLanguageModel model, Prompt prompt) {
         this.chatHistory = chatHistory;
         this.llm = model;
@@ -109,6 +111,21 @@ public abstract class AbstractLLMContext implements LLMContext {
     @Override
     public void setTools(List<ToolDefinition> tools) {
         this.tools = tools != null ? tools : Collections.emptyList();
+    }
+
+    @Override
+    public boolean isStreamUsageEnabled() {
+        return streamUsage;
+    }
+
+    /**
+     * Control whether streamed calls ask the server for token accounting. Turn this off for servers
+     * that reject the {@code stream_options} field.
+     *
+     * @param streamUsage
+     */
+    public void setStreamUsageEnabled(boolean streamUsage) {
+        this.streamUsage = streamUsage;
     }
 
 }

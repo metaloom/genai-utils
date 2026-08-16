@@ -86,4 +86,15 @@ public interface LLMContext {
 	 * @param tools
 	 */
 	void setTools(List<ToolDefinition> tools);
+
+	/**
+	 * Whether streamed calls ask the server for token accounting ({@code stream_options.include_usage}).
+	 * Servers that speak the OpenAI protocol - vLLM, llama.cpp, OpenAI - then append a final,
+	 * choice-less chunk carrying the {@code usage} object of the call.
+	 *
+	 * @return true by default
+	 */
+	default boolean isStreamUsageEnabled() {
+		return true;
+	}
 }

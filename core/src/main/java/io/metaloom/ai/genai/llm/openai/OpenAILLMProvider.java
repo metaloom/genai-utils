@@ -5,7 +5,9 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -26,16 +28,20 @@ import com.openai.models.chat.completions.ChatCompletionCreateParams.Builder;
 import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall;
 import com.openai.models.chat.completions.ChatCompletionMessageParam;
 import com.openai.models.chat.completions.ChatCompletionMessageToolCall;
+import com.openai.models.chat.completions.ChatCompletionStreamOptions;
 import com.openai.models.chat.completions.ChatCompletionSystemMessageParam;
 import com.openai.models.chat.completions.ChatCompletionToolMessageParam;
 import com.openai.models.chat.completions.ChatCompletionUserMessageParam;
+import com.openai.models.completions.CompletionUsage;
 
 import io.metaloom.ai.genai.llm.ChatMessage;
 import io.metaloom.ai.genai.llm.Chunk;
 import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
+import io.metaloom.ai.genai.llm.LLMResponse;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
 import io.metaloom.ai.genai.llm.StreamEvent;
+import io.metaloom.ai.genai.llm.TokenUsage;
 import io.metaloom.ai.genai.llm.ToolCall;
 import io.metaloom.ai.genai.llm.ToolCallResponse;
 import io.metaloom.ai.genai.llm.ToolDefinition;
@@ -65,6 +71,11 @@ public class OpenAILLMProvider implements LLMProvider {
 
 	@Override
 	public String generate(LLMContext ctx) {
+		return generateResponse(ctx).content();
+	}
+
+	@Override
+	public LLMResponse generateResponse(LLMContext ctx) {
 		LargeLanguageModel model = ctx.model();
 		OpenAIClient client = buildClient(model.url());
 
@@ -88,7 +99,7 @@ public class OpenAILLMProvider implements LLMProvider {
 				logger.info("Reasoning content:\n{}", reasoning);
 			}
 		}
-		return firstChoice.message().content().orElseThrow();
+		return new LLMResponse(firstChoice.message().content().orElseThrow(), extractUsage(chatCompletion.usage()));
 	}
 
 	@Override
@@ -106,6 +117,7 @@ public class OpenAILLMProvider implements LLMProvider {
 		Builder builder = ChatCompletionCreateParams.builder().addUserMessage(ctx.prompt().input())
 			.model(model.id());
 		applyThinking(builder, ctx);
+		applyStreamUsage(builder, ctx);
 
 		ChatCompletionCreateParams params = builder.build();
 		StreamResponse<ChatCompletionChunk> streamResponse = client.chat().completions().createStreaming(params);
@@ -123,7 +135,13 @@ public class OpenAILLMProvider implements LLMProvider {
 				// iterate over the upstream stream and put chunks into the downstream
 				// observable
 				AtomicBoolean inThinkingArea = new AtomicBoolean(false);
-				streamResponse.stream().filter(c -> !c.choices().isEmpty()).map(c -> c.choices().getFirst())
+				// The token accounting arrives in a trailing, choice-less chunk (only when
+				// stream_options.include_usage was requested), so capture it before the
+				// choice filter drops that chunk.
+				AtomicReference<TokenUsage> usage = new AtomicReference<>(TokenUsage.NONE);
+				streamResponse.stream()
+					.peek(c -> captureUsage(c, usage))
+					.filter(c -> !c.choices().isEmpty()).map(c -> c.choices().getFirst())
 					.peek(choice -> {
 						if (choice.finishReason().isPresent()) {
 							logger.debug("LLM processing finishes with reason: {}", choice.finishReason());
@@ -149,6 +167,11 @@ public class OpenAILLMProvider implements LLMProvider {
 						}
 						return token;
 					}).forEach(emitter::onNext);
+
+				// Close the stream with one text-less chunk that carries the token accounting.
+				if (usage.get().isReported()) {
+					emitter.onNext(ChunkImpl.usageChunk(usage.get()));
+				}
 
 				// complete the downstream observable after reaching the end of the upstream
 				// stream
@@ -177,6 +200,7 @@ public class OpenAILLMProvider implements LLMProvider {
 			.temperature(ctx.temperature())
 			.model(model.id());
 		applyThinking(paramsBuilder, ctx);
+		applyStreamUsage(paramsBuilder, ctx);
 		addTools(paramsBuilder, ctx.tools());
 
 		ChatCompletionCreateParams params = paramsBuilder.build();
@@ -193,8 +217,14 @@ public class OpenAILLMProvider implements LLMProvider {
 				StringBuilder fullText = new StringBuilder();
 				ToolCallAccumulator toolCalls = new ToolCallAccumulator();
 				AtomicBoolean inThinkingArea = new AtomicBoolean(false);
+				// The token accounting arrives in a trailing, choice-less chunk (only when
+				// stream_options.include_usage was requested), so capture it before the
+				// choice filter drops that chunk.
+				AtomicReference<TokenUsage> usage = new AtomicReference<>(TokenUsage.NONE);
 
-				streamResponse.stream().filter(c -> !c.choices().isEmpty()).map(c -> c.choices().getFirst())
+				streamResponse.stream()
+					.peek(c -> captureUsage(c, usage))
+					.filter(c -> !c.choices().isEmpty()).map(c -> c.choices().getFirst())
 					.forEach(choice -> {
 						if (choice.finishReason().isPresent()) {
 							logger.debug("LLM processing finishes with reason: {}", choice.finishReason());
@@ -230,7 +260,7 @@ public class OpenAILLMProvider implements LLMProvider {
 				if (!calls.isEmpty()) {
 					emitter.onNext(new StreamEvent.ToolCallsComplete(calls));
 				}
-				emitter.onNext(new StreamEvent.Completed(fullText.isEmpty() ? null : fullText.toString()));
+				emitter.onNext(new StreamEvent.Completed(fullText.isEmpty() ? null : fullText.toString(), usage.get()));
 				emitter.onComplete();
 			} catch (Exception e) {
 				logger.error("Caught an unexpected exception type while generating streaming tool calls: {}",
@@ -277,7 +307,7 @@ public class OpenAILLMProvider implements LLMProvider {
 				})
 				.collect(Collectors.toList());
 		}
-		return new ToolCallResponse(content, toolCalls);
+		return new ToolCallResponse(content, toolCalls, extractUsage(chatCompletion.usage()));
 	}
 
 	/**
@@ -333,6 +363,52 @@ public class OpenAILLMProvider implements LLMProvider {
 				.parameters(convertToFunctionParameters(tool.parameters()))
 				.build();
 			builder.addFunctionTool(funcDef);
+		}
+	}
+
+	/**
+	 * Ask the server to report the token accounting of a streamed call. A streamed OpenAI-compatible
+	 * response carries no {@code usage} object unless {@code stream_options.include_usage} was
+	 * requested; with the flag set, vLLM and friends append one final, choice-less chunk holding it.
+	 */
+	private void applyStreamUsage(Builder builder, LLMContext ctx) {
+		if (ctx.isStreamUsageEnabled()) {
+			builder.streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build());
+		}
+	}
+
+	/**
+	 * Remember the token accounting of a streamed call once the server sends it.
+	 */
+	private static void captureUsage(ChatCompletionChunk chunk, AtomicReference<TokenUsage> target) {
+		TokenUsage usage = extractUsage(chunk.usage());
+		if (usage.isReported()) {
+			target.set(usage);
+		}
+	}
+
+	/**
+	 * Convert the {@code usage} object of an OpenAI-compatible response into the API type. Servers
+	 * differ in how much of it they fill in - a partial or absent object yields
+	 * {@link TokenUsage#NONE} rather than an error, since token accounting is never essential to the
+	 * result of the call.
+	 */
+	private static TokenUsage extractUsage(Optional<CompletionUsage> usage) {
+		if (usage == null || usage.isEmpty()) {
+			return TokenUsage.NONE;
+		}
+		try {
+			CompletionUsage u = usage.get();
+			long reasoningTokens = u.completionTokensDetails()
+				.flatMap(CompletionUsage.CompletionTokensDetails::reasoningTokens)
+				.orElse(0L);
+			long cachedTokens = u.promptTokensDetails()
+				.flatMap(CompletionUsage.PromptTokensDetails::cachedTokens)
+				.orElse(0L);
+			return new TokenUsage(u.promptTokens(), u.completionTokens(), u.totalTokens(), reasoningTokens, cachedTokens);
+		} catch (Exception e) {
+			logger.debug("Server reported an incomplete usage object. Ignoring the token accounting.", e);
+			return TokenUsage.NONE;
 		}
 	}
 

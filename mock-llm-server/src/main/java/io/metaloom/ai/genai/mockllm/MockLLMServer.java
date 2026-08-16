@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.metaloom.ai.genai.mockllm.MockResponse.ErrorResponse;
+import io.metaloom.ai.genai.mockllm.MockResponse.MockUsage;
 import io.metaloom.ai.genai.mockllm.MockResponse.StructuredResponse;
 import io.metaloom.ai.genai.mockllm.MockResponse.SuccessResponse;
 import io.metaloom.ai.genai.mockllm.MockResponse.ToolCallsResponse;
@@ -64,8 +65,14 @@ public final class MockLLMServer implements AutoCloseable {
     /** Resolved port after {@link #start()} has been called. */
     private int actualPort = -1;
 
+    /** Prompt tokens reported when no explicit usage was configured. */
+    private static final long DEFAULT_PROMPT_TOKENS = 10;
+
     /** Pre-programmed responses consumed in FIFO order. */
     private final Deque<MockResponse> responseQueue = new ArrayDeque<>();
+
+    /** Token accounting reported for every response; null means "derive it from the content". */
+    private MockUsage usage;
 
     private Vertx vertx;
     private HttpServer httpServer;
@@ -154,6 +161,25 @@ public final class MockLLMServer implements AutoCloseable {
         return this;
     }
 
+    /**
+     * Reports the given token accounting in the {@code usage} object of every response instead of
+     * deriving it from the response content. Use it when a test asserts on exact token counts.
+     *
+     * @param promptTokens     reported as {@code usage.prompt_tokens}
+     * @param completionTokens reported as {@code usage.completion_tokens}
+     */
+    public MockLLMServer usage(long promptTokens, long completionTokens) {
+        return usage(new MockUsage(promptTokens, completionTokens));
+    }
+
+    /**
+     * Reports the given token accounting in the {@code usage} object of every response.
+     */
+    public MockLLMServer usage(MockUsage usage) {
+        this.usage = usage;
+        return this;
+    }
+
     // -------------------------------------------------------------------------
     // Lifecycle
     // -------------------------------------------------------------------------
@@ -199,9 +225,9 @@ public final class MockLLMServer implements AutoCloseable {
                 case StructuredResponse s -> respondContent(ctx, streaming, s.json().encode(), "stop");
                 case ToolCallsResponse t -> {
                     if (streaming) {
-                        streamToolCalls(ctx.response(), t);
+                        streamToolCalls(ctx.response(), t, isUsageRequested(ctx) ? usageJson(null) : null);
                     } else {
-                        String body = buildToolCallsBody(t);
+                        String body = buildToolCallsBody(t, usageJson(null));
                         ctx.response()
                                 .setStatusCode(200)
                                 .putHeader("Content-Type", "application/json")
@@ -364,13 +390,28 @@ public final class MockLLMServer implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns {@code true} when the client asked for token accounting on a streamed call
+     * ({@code "stream_options": {"include_usage": true}}). A real OpenAI-compatible server only
+     * appends the trailing usage chunk when this flag was sent.
+     */
+    private static boolean isUsageRequested(io.vertx.ext.web.RoutingContext ctx) {
+        try {
+            JsonObject body = ctx.body() != null ? ctx.body().asJsonObject() : null;
+            JsonObject streamOptions = body != null ? body.getJsonObject("stream_options") : null;
+            return streamOptions != null && Boolean.TRUE.equals(streamOptions.getBoolean("include_usage", false));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** Sends the given content either as a single JSON completion or as an SSE stream. */
-    private static void respondContent(io.vertx.ext.web.RoutingContext ctx, boolean streaming, String content,
+    private void respondContent(io.vertx.ext.web.RoutingContext ctx, boolean streaming, String content,
             String finishReason) {
         if (streaming) {
-            streamContent(ctx.response(), content, finishReason);
+            streamContent(ctx.response(), content, finishReason, isUsageRequested(ctx) ? usageJson(content) : null);
         } else {
-            String body = buildCompletionBody(content, finishReason);
+            String body = buildCompletionBody(content, finishReason, usageJson(content));
             ctx.response()
                     .setStatusCode(200)
                     .putHeader("Content-Type", "application/json")
@@ -382,7 +423,8 @@ public final class MockLLMServer implements AutoCloseable {
      * Emits the content as a sequence of {@code chat.completion.chunk} SSE events, mirroring the
      * OpenAI streaming wire format, followed by a terminating {@code data: [DONE]} event.
      */
-    private static void streamContent(HttpServerResponse response, String content, String finishReason) {
+    private static void streamContent(HttpServerResponse response, String content, String finishReason,
+            JsonObject usage) {
         long created = System.currentTimeMillis() / 1000;
         String id = "chatcmpl-mock-" + shortUuid();
 
@@ -403,6 +445,7 @@ public final class MockLLMServer implements AutoCloseable {
 
         // Final chunk carries the finish reason and an empty delta.
         response.write(sseEvent(streamChunk(id, created, new JsonObject(), finishReason)));
+        writeUsageChunk(response, id, created, usage);
         response.write("data: [DONE]\n\n");
         response.end();
     }
@@ -413,7 +456,8 @@ public final class MockLLMServer implements AutoCloseable {
      * JSON. The slices are deliberately split mid-token so a client that simply concatenates them
      * per {@code index} is exercised properly.
      */
-    private static void streamToolCalls(HttpServerResponse response, ToolCallsResponse toolCallsResponse) {
+    private static void streamToolCalls(HttpServerResponse response, ToolCallsResponse toolCallsResponse,
+            JsonObject usage) {
         long created = System.currentTimeMillis() / 1000;
         String id = "chatcmpl-mock-" + shortUuid();
 
@@ -450,8 +494,29 @@ public final class MockLLMServer implements AutoCloseable {
         }
 
         response.write(sseEvent(streamChunk(id, created, new JsonObject(), "tool_calls")));
+        writeUsageChunk(response, id, created, usage);
         response.write("data: [DONE]\n\n");
         response.end();
+    }
+
+    /**
+     * Emits the trailing usage chunk of a streamed call: a {@code chat.completion.chunk} with an
+     * empty {@code choices} array that only carries the {@code usage} object - exactly how vLLM,
+     * llama.cpp and OpenAI report token accounting for a stream.
+     */
+    private static void writeUsageChunk(HttpServerResponse response, String id, long created, JsonObject usage) {
+        if (usage == null) {
+            return;
+        }
+        String chunk = new JsonObject()
+                .put("id", id)
+                .put("object", "chat.completion.chunk")
+                .put("created", created)
+                .put("model", "mock-model")
+                .put("choices", new JsonArray())
+                .put("usage", usage)
+                .encode();
+        response.write(sseEvent(chunk));
     }
 
     private static String sseEvent(String json) {
@@ -480,7 +545,31 @@ public final class MockLLMServer implements AutoCloseable {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 12);
     }
 
-    private static String buildCompletionBody(String content, String finishReason) {
+    /**
+     * Builds the {@code usage} object reported for a response: the counts configured via
+     * {@link #usage(MockUsage)} when set, otherwise counts derived from the response content.
+     *
+     * @param content response content, may be null for a tool-call response
+     */
+    private JsonObject usageJson(String content) {
+        long promptTokens = usage != null ? usage.promptTokens() : DEFAULT_PROMPT_TOKENS;
+        long completionTokens = usage != null
+                ? usage.completionTokens()
+                : (content == null ? 0 : content.length() / 4 + 1);
+        long reasoningTokens = usage != null ? usage.reasoningTokens() : 0;
+        long cachedPromptTokens = usage != null ? usage.cachedPromptTokens() : 0;
+
+        return new JsonObject()
+                .put("prompt_tokens", promptTokens)
+                .put("completion_tokens", completionTokens)
+                .put("total_tokens", promptTokens + completionTokens)
+                .put("completion_tokens_details", new JsonObject()
+                        .put("reasoning_tokens", reasoningTokens))
+                .put("prompt_tokens_details", new JsonObject()
+                        .put("cached_tokens", cachedPromptTokens));
+    }
+
+    private static String buildCompletionBody(String content, String finishReason, JsonObject usage) {
         long created = System.currentTimeMillis() / 1000;
         String id = "chatcmpl-mock-" + shortUuid();
 
@@ -493,13 +582,6 @@ public final class MockLLMServer implements AutoCloseable {
                 .put("message", message)
                 .put("finish_reason", finishReason);
 
-        JsonObject usage = new JsonObject()
-                .put("prompt_tokens", 10)
-                .put("completion_tokens", content.length() / 4 + 1)
-                .put("total_tokens", 10 + content.length() / 4 + 1)
-                .put("completion_tokens_details", new JsonObject()
-                        .put("reasoning_tokens", 0));
-
         return new JsonObject()
                 .put("id", id)
                 .put("object", "chat.completion")
@@ -510,7 +592,7 @@ public final class MockLLMServer implements AutoCloseable {
                 .encode();
     }
 
-    private static String buildToolCallsBody(ToolCallsResponse toolCallsResponse) {
+    private static String buildToolCallsBody(ToolCallsResponse toolCallsResponse, JsonObject usage) {
         long created = System.currentTimeMillis() / 1000;
         String id = "chatcmpl-mock-" + shortUuid();
 
@@ -534,13 +616,6 @@ public final class MockLLMServer implements AutoCloseable {
                 .put("index", 0)
                 .put("message", message)
                 .put("finish_reason", "tool_calls");
-
-        JsonObject usage = new JsonObject()
-                .put("prompt_tokens", 10)
-                .put("completion_tokens", 0)
-                .put("total_tokens", 10)
-                .put("completion_tokens_details", new JsonObject()
-                        .put("reasoning_tokens", 0));
 
         return new JsonObject()
                 .put("id", id)

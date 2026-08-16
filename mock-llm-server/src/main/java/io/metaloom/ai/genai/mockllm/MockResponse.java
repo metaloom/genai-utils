@@ -38,6 +38,23 @@ public sealed interface MockResponse {
     record StructuredResponse(JsonObject json) implements MockResponse {}
 
     /**
+     * Token accounting the server reports for every queued response. Set it via
+     * {@code MockLLMServer#usage(...)} when a test wants to assert on exact numbers; without it the
+     * server derives plausible counts from the response content.
+     *
+     * @param promptTokens       reported as {@code usage.prompt_tokens}
+     * @param completionTokens   reported as {@code usage.completion_tokens}
+     * @param reasoningTokens    reported as {@code usage.completion_tokens_details.reasoning_tokens}
+     * @param cachedPromptTokens reported as {@code usage.prompt_tokens_details.cached_tokens}
+     */
+    record MockUsage(long promptTokens, long completionTokens, long reasoningTokens, long cachedPromptTokens) {
+
+        public MockUsage(long promptTokens, long completionTokens) {
+            this(promptTokens, completionTokens, 0, 0);
+        }
+    }
+
+    /**
      * A single tool / function call the model wants to make.
      *
      * @param id            tool-call id (e.g. {@code "call_abc123"})
