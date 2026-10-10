@@ -2,7 +2,6 @@ package io.metaloom.ai.genai.llm.prompt.impl;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Map.Entry;
 
 import io.metaloom.ai.genai.llm.prompt.Prompt;
 import io.metaloom.ai.genai.llm.prompt.PromptKey;
@@ -25,16 +24,53 @@ public class PromptImpl implements Prompt {
 
     @Override
     public String input() {
-        String output = template;
-        // Poor Mans Template Handling
-        for (Entry<String, String> entry : parameters.entrySet()) {
-            output = output.replace("${" + entry.getKey() + "}", entry.getValue());
-        }
+        String output = substitute(template, parameters);
         if (text != null) {
             return output + text;
         } else {
             return output;
         }
+    }
+
+    /**
+     * Replace every {@code ${name}} placeholder of the template in a single left-to-right pass.
+     *
+     * <p>
+     * Substituted values are never scanned again. Replacing one parameter after the other (in HashMap order) did that: a
+     * value containing {@code ${other}} - typically untrusted text such as the content to translate - had that
+     * placeholder rewritten whenever {@code other} happened to be applied later. Placeholders without a parameter are
+     * kept verbatim, as before.
+     * </p>
+     */
+    static String substitute(String template, Map<String, String> parameters) {
+        if (template == null || parameters.isEmpty()) {
+            return template;
+        }
+        StringBuilder out = new StringBuilder(template.length());
+        int pos = 0;
+        while (pos < template.length()) {
+            int start = template.indexOf("${", pos);
+            if (start < 0) {
+                break;
+            }
+            int end = template.indexOf('}', start + 2);
+            if (end < 0) {
+                break;
+            }
+            out.append(template, pos, start);
+            String name = template.substring(start + 2, end);
+            String value = parameters.get(name);
+            if (value != null) {
+                out.append(value);
+                pos = end + 1;
+            } else {
+                // Unknown placeholder: keep the "${" and continue right after it, so a nested "${a${b}}" still resolves "${b}".
+                out.append("${");
+                pos = start + 2;
+            }
+        }
+        out.append(template, pos, template.length());
+        return out.toString();
     }
 
     @Override
