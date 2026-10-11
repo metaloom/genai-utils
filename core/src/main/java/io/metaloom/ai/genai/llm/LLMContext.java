@@ -65,9 +65,47 @@ public interface LLMContext {
 
 	void setTemperature(double temperature);
 
+	/**
+	 * Turn reasoning on without stating an effort. Shorthand for
+	 * {@code reasoning(ReasoningLevel.ON)}.
+	 *
+	 * @return fluent API
+	 */
 	LLMContext enableThink();
 
+	/**
+	 * Whether the context asks the model to reason.
+	 *
+	 * @return true for every {@link ReasoningLevel} but {@link ReasoningLevel#OFF} and
+	 *         {@link ReasoningLevel#UNSET}
+	 */
 	boolean isThinkEnabled();
+
+	/**
+	 * Amount of reasoning ("thinking") the LLM should spend on the call.
+	 *
+	 * @return never null - {@link ReasoningLevel#UNSET} when no preference was configured
+	 */
+	ReasoningLevel reasoningLevel();
+
+	/**
+	 * Set the amount of reasoning the LLM should spend on the call. Not every model supports every
+	 * level - see {@link ReasoningLevel}.
+	 *
+	 * @param level level to apply, null resets it to {@link ReasoningLevel#UNSET}
+	 */
+	void setReasoningLevel(ReasoningLevel level);
+
+	/**
+	 * Fluent variant of {@link #setReasoningLevel(ReasoningLevel)}.
+	 *
+	 * @param level
+	 * @return fluent API
+	 */
+	default LLMContext reasoning(ReasoningLevel level) {
+		setReasoningLevel(level);
+		return this;
+	}
 
 	Prompt prompt();
 

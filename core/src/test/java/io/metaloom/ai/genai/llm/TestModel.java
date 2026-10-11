@@ -31,4 +31,11 @@ public class TestModel implements LargeLanguageModel {
 		return new TestModel("mistralai/Mistral-Small-24B-Instruct-2501", url, 128_000);
 	}
 
+	/**
+	 * A reasoning model whose chat template honours {@code reasoning_effort} (low, medium, xhigh).
+	 */
+	public static TestModel qwen3(String url) {
+		return new TestModel("orcarouter/Qwen3.8-27B-Uncensored-GGUF", url, 37_120);
+	}
+
 }

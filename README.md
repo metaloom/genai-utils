@@ -13,6 +13,40 @@ This project contains utilities to be used for generative ai.
 ```
 
 
+## Reasoning level
+
+How much a reasoning model should think is configured per call on the `LLMContext`:
+
+```java
+LLMContext ctx = LLMContext.ctx(prompt, model)
+    .reasoning(ReasoningLevel.LOW);   // or ctx.setReasoningLevel(...)
+```
+
+| Level | `enable_thinking` | `reasoning_effort` |
+| --- | --- | --- |
+| `UNSET` (default) | – | – |
+| `OFF` | `false` | `none` |
+| `ON` (what `enableThink()` sets) | `true` | – |
+| `MINIMAL` / `LOW` / `MEDIUM` / `HIGH` / `XHIGH` | `true` | the level's name in lower case |
+
+`UNSET` sends nothing at all and leaves the server at its own default. Every other level travels in
+`chat_template_kwargs`, which is how llama.cpp and vLLM pass values into the chat template; the
+effort is additionally sent as the top level `reasoning_effort` field that OpenAI itself reads.
+
+Not every model knows every effort. OpenAI's reasoning models accept `minimal`, `low`, `medium`,
+`high` and (from gpt-5.1-codex-max on) `xhigh`, while the Qwen3.8 chat template only accepts `low`,
+`medium` and `xhigh` and fails the request for anything else - so pick a level the target model
+supports.
+
+To dial the reasoning of a whole deployment up or down without touching the call sites, set the
+default that a fresh context starts with:
+
+```bash
+-Dgenai.reasoning.level=low     # or: GENAI_REASONING_LEVEL=low
+```
+
+The system property wins over the environment variable; an unparsable value is logged and ignored.
+
 ## Token usage
 
 Every LLM call reports the token accounting the server sent in the `usage` object of the

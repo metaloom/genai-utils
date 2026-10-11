@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -70,6 +71,9 @@ public final class MockLLMServer implements AutoCloseable {
 
     /** Pre-programmed responses consumed in FIFO order. */
     private final Deque<MockResponse> responseQueue = new ArrayDeque<>();
+
+    /** Bodies of the chat completion requests received so far, in arrival order. */
+    private final Deque<JsonObject> receivedRequests = new ConcurrentLinkedDeque<>();
 
     /** Token accounting reported for every response; null means "derive it from the content". */
     private MockUsage usage;
@@ -206,6 +210,7 @@ public final class MockLLMServer implements AutoCloseable {
         });
 
         io.vertx.core.Handler<io.vertx.ext.web.RoutingContext> chatHandler = ctx -> {
+            captureRequest(ctx);
             MockResponse next = responseQueue.pollFirst();
             if (next == null) {
                 log.warn("No more queued responses – returning 500");
@@ -374,6 +379,42 @@ public final class MockLLMServer implements AutoCloseable {
      */
     public void clearResponses() {
         responseQueue.clear();
+    }
+
+    /**
+     * Returns the bodies of the chat completion requests the server received, in arrival order.
+     * Use it to assert on what the client actually put on the wire.
+     */
+    public List<JsonObject> receivedRequests() {
+        return List.copyOf(receivedRequests);
+    }
+
+    /**
+     * Returns the body of the most recent chat completion request, or {@code null} when none was
+     * received yet.
+     */
+    public JsonObject lastRequest() {
+        return receivedRequests.peekLast();
+    }
+
+    /**
+     * Forgets the requests received so far. Useful between test cases when the server instance is
+     * shared across multiple tests.
+     */
+    public void clearRequests() {
+        receivedRequests.clear();
+    }
+
+    /** Remembers the request body so that a test can assert on the fields the client sent. */
+    private void captureRequest(io.vertx.ext.web.RoutingContext ctx) {
+        try {
+            JsonObject body = ctx.body() != null ? ctx.body().asJsonObject() : null;
+            if (body != null) {
+                receivedRequests.addLast(body);
+            }
+        } catch (Exception e) {
+            log.warn("Could not parse the request body of {}", ctx.request().uri(), e);
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
 import com.openai.models.FunctionDefinition;
 import com.openai.models.FunctionParameters;
+import com.openai.models.ReasoningEffort;
 import com.openai.models.chat.completions.ChatCompletion;
 import com.openai.models.chat.completions.ChatCompletion.Choice;
 import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam;
@@ -40,6 +41,7 @@ import io.metaloom.ai.genai.llm.LLMContext;
 import io.metaloom.ai.genai.llm.LLMProvider;
 import io.metaloom.ai.genai.llm.LLMResponse;
 import io.metaloom.ai.genai.llm.LargeLanguageModel;
+import io.metaloom.ai.genai.llm.ReasoningLevel;
 import io.metaloom.ai.genai.llm.StreamEvent;
 import io.metaloom.ai.genai.llm.TokenUsage;
 import io.metaloom.ai.genai.llm.ToolCall;
@@ -53,6 +55,7 @@ import io.reactivex.rxjava3.core.BackpressureStrategy;
 import io.reactivex.rxjava3.core.Flowable;
 import io.reactivex.rxjava3.core.FlowableOnSubscribe;
 import io.reactivex.rxjava3.schedulers.Schedulers;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
 /**
@@ -80,10 +83,10 @@ public class OpenAILLMProvider implements LLMProvider {
 		OpenAIClient client = buildClient(model.url());
 
 		Builder builder = ChatCompletionCreateParams.builder()
-			.messages(convertHistory(ctx.chatHistory()))
+			.messages(messagesFor(ctx))
 			.temperature(ctx.temperature())
 			.model(model.id());
-		applyThinking(builder, ctx);
+		applyReasoning(builder, ctx);
 
 		ChatCompletionCreateParams params = builder.build();
 		ChatCompletion chatCompletion = client.chat().completions().create(params);
@@ -116,7 +119,7 @@ public class OpenAILLMProvider implements LLMProvider {
 
 		Builder builder = ChatCompletionCreateParams.builder().addUserMessage(ctx.prompt().input())
 			.model(model.id());
-		applyThinking(builder, ctx);
+		applyReasoning(builder, ctx);
 		applyStreamUsage(builder, ctx);
 
 		ChatCompletionCreateParams params = builder.build();
@@ -196,10 +199,10 @@ public class OpenAILLMProvider implements LLMProvider {
 		OpenAIClient client = buildClient(model.url());
 
 		Builder paramsBuilder = ChatCompletionCreateParams.builder()
-			.messages(convertHistory(ctx.chatHistory()))
+			.messages(messagesFor(ctx))
 			.temperature(ctx.temperature())
 			.model(model.id());
-		applyThinking(paramsBuilder, ctx);
+		applyReasoning(paramsBuilder, ctx);
 		applyStreamUsage(paramsBuilder, ctx);
 		addTools(paramsBuilder, ctx.tools());
 
@@ -282,10 +285,10 @@ public class OpenAILLMProvider implements LLMProvider {
 		OpenAIClient client = buildClient(model.url());
 
 		Builder paramsBuilder = ChatCompletionCreateParams.builder()
-			.addUserMessage(ctx.prompt().input())
+			.messages(messagesFor(ctx))
 			.temperature(ctx.temperature())
 			.model(model.id());
-
+		applyReasoning(paramsBuilder, ctx);
 		addTools(paramsBuilder, ctx.tools());
 
 		ChatCompletionCreateParams params = paramsBuilder.build();
@@ -413,18 +416,61 @@ public class OpenAILLMProvider implements LLMProvider {
 	}
 
 	/**
-	 * Ask the server to run the model in reasoning mode. {@code chat_template_kwargs} is how
-	 * llama.cpp and vLLM pass the flag into the chat template; servers that do not know the field
-	 * ignore it.
+	 * Tell the server how much reasoning the model should spend on the call.
+	 *
+	 * <p>
+	 * {@code enable_thinking} and {@code reasoning_effort} are handed over in
+	 * {@code chat_template_kwargs}, which is how llama.cpp and vLLM pass values into the chat
+	 * template; servers that do not know the field ignore it. The effort is additionally set as the
+	 * top level {@code reasoning_effort} field that OpenAI itself reads. Nothing is sent for
+	 * {@link ReasoningLevel#UNSET}, which leaves the server at its own default.
 	 */
-	private void applyThinking(Builder builder, LLMContext ctx) {
-		if (ctx.isThinkEnabled()) {
-			logger.debug("Enable thinking mode");
-			builder.putAdditionalBodyProperty(
-				"chat_template_kwargs",
-				JsonValue.from(Map.of(
-					"enable_thinking", true)));
+	private void applyReasoning(Builder builder, LLMContext ctx) {
+		ReasoningLevel level = ctx.reasoningLevel();
+		if (level == null || !level.isSet()) {
+			return;
 		}
+		logger.debug("Applying reasoning level {}", level);
+
+		Map<String, Object> templateArgs = new LinkedHashMap<>();
+		if (level.thinking() != null) {
+			templateArgs.put("enable_thinking", level.thinking());
+		}
+		if (level.effort() != null) {
+			templateArgs.put("reasoning_effort", level.effort());
+		}
+		builder.putAdditionalBodyProperty("chat_template_kwargs", JsonValue.from(templateArgs));
+
+		if (level.effort() != null) {
+			builder.reasoningEffort(ReasoningEffort.of(level.effort()));
+		}
+	}
+
+	/**
+	 * The messages one request carries: the conversation, or the bare prompt when there is none.
+	 *
+	 * <p>
+	 * {@code generateWithTools} used to send only {@code ctx.prompt().input()} while its streaming
+	 * sibling sent the whole history. An agent driving a tool loop through the blocking path
+	 * therefore re-sent the same single user message on every turn - no system prompt, no earlier
+	 * answer, and crucially neither the assistant's {@code tool_calls} nor the {@code tool} result
+	 * replying to them. The model could not tell that it had already called the tool, so it called
+	 * it again, every turn, until the loop hit its turn limit. It looks exactly like a weak model
+	 * looping, which is what makes it expensive to find.
+	 * </p>
+	 *
+	 * <p>
+	 * The fallback keeps the older contract alive for callers that fill in a prompt and no
+	 * history; an empty message list is not a request any server accepts.
+	 * </p>
+	 */
+	List<ChatCompletionMessageParam> messagesFor(LLMContext ctx) {
+		List<ChatCompletionMessageParam> history = convertHistory(ctx.chatHistory());
+		if (!history.isEmpty()) {
+			return history;
+		}
+		return List.of(ChatCompletionMessageParam.ofUser(
+			ChatCompletionUserMessageParam.builder().content(ctx.prompt().input()).build()));
 	}
 
 	private List<ChatCompletionMessageParam> convertHistory(List<? extends ChatMessage> chatHistory) {
@@ -472,9 +518,55 @@ public class OpenAILLMProvider implements LLMProvider {
 		FunctionParameters.Builder builder = FunctionParameters.builder();
 		Map<String, Object> map = params.getMap();
 		for (Map.Entry<String, Object> entry : map.entrySet()) {
-			builder.putAdditionalProperty(entry.getKey(), JsonValue.from(entry.getValue()));
+			builder.putAdditionalProperty(entry.getKey(), JsonValue.from(plain(entry.getValue())));
 		}
 		return builder.build();
+	}
+
+	/**
+	 * Convert a Vert.x JSON tree into plain maps and lists.
+	 *
+	 * <p>
+	 * {@link JsonValue#from(Object)} serialises with the OpenAI SDK's own Jackson mapper, which has
+	 * no Vert.x module registered. {@link JsonObject} implements
+	 * {@code Iterable<Map.Entry<String, Object>>}, so that mapper writes one as an <b>array of its
+	 * entries</b> rather than as an object: a tool schema
+	 * {@code {"properties":{"query":{"type":"string"}}}} goes out as
+	 * {@code {"properties":[{"query":[{"type":"string"}]}]}}.
+	 * </p>
+	 *
+	 * <p>
+	 * Nothing rejects that on the way out, and a server that only feeds the schema to a chat
+	 * template renders the wreckage into the prompt and answers normally - which is why this
+	 * survived. A server that compiles the schema into a grammar refuses the request outright:
+	 * llama.cpp answers {@code 400 ... JSON schema error at #: properties must be an object}, and
+	 * so would OpenAI. Only the top level survived before, because {@code getMap()} unwraps one
+	 * level and leaves every nested value a {@code JsonObject}.
+	 * </p>
+	 */
+	static Object plain(Object value) {
+		if (value instanceof JsonObject json) {
+			return plain(json.getMap());
+		}
+		if (value instanceof JsonArray array) {
+			return plain(array.getList());
+		}
+		if (value instanceof Map<?, ?> map) {
+			// LinkedHashMap: a schema's key order is what a reader of the prompt sees.
+			Map<String, Object> out = new LinkedHashMap<>();
+			for (Map.Entry<?, ?> entry : map.entrySet()) {
+				out.put(String.valueOf(entry.getKey()), plain(entry.getValue()));
+			}
+			return out;
+		}
+		if (value instanceof List<?> list) {
+			List<Object> out = new ArrayList<>(list.size());
+			for (Object item : list) {
+				out.add(plain(item));
+			}
+			return out;
+		}
+		return value;
 	}
 
 	private OpenAIClient buildClient(String url) {

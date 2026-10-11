@@ -19,7 +19,7 @@ public abstract class AbstractLLMContext implements LLMContext {
 
     private List<? extends ChatMessage> chatHistory = new ArrayList<>();
 
-    private boolean think = false;
+    private ReasoningLevel reasoningLevel = ReasoningLevel.defaultLevel();
 
     private Prompt prompt;
 
@@ -72,12 +72,22 @@ public abstract class AbstractLLMContext implements LLMContext {
 
     @Override
     public LLMContext enableThink() {
-        this.think = true;
-        return this;
+        return reasoning(ReasoningLevel.ON);
     }
 
+    @Override
     public boolean isThinkEnabled() {
-        return think;
+        return reasoningLevel.isThinkEnabled();
+    }
+
+    @Override
+    public ReasoningLevel reasoningLevel() {
+        return reasoningLevel;
+    }
+
+    @Override
+    public void setReasoningLevel(ReasoningLevel reasoningLevel) {
+        this.reasoningLevel = reasoningLevel == null ? ReasoningLevel.UNSET : reasoningLevel;
     }
 
     @Override
@@ -91,7 +101,8 @@ public abstract class AbstractLLMContext implements LLMContext {
 
     @Override
     public String toString() {
-        return "[msgs:" + chatHistory().size() + ",limit:" + tokenOutputLimit + ",temp:" + temperature + ",model:" + llm.id() + ",seed:" + seed + "]";
+        return "[msgs:" + chatHistory().size() + ",limit:" + tokenOutputLimit + ",temp:" + temperature + ",model:" + llm.id() + ",seed:" + seed
+            + ",reasoning:" + reasoningLevel + "]";
     }
 
     public static LLMContext ctx(List<? extends ChatMessage> history, LargeLanguageModel model, Prompt prompt) {
